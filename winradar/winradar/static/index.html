@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>WinRadar</title>
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<aside class="side">
+  <div class="brand"><div class="logo">📈</div><div><b>WinRadar</b><small id="country">United States</small></div></div>
+  <nav id="nav">
+    <a data-view="overview">▦ Tổng quan</a>
+    <div class="group">Khám phá</div>
+    <a data-view="sap_win">⚡ Sắp WIN <span class="n" data-count="sap_win"></span></a>
+    <a data-view="win">🏆 Video Win <span class="n" data-count="win"></span></a>
+    <a data-view="scale">↗ Video scale <span class="n" data-count="scale"></span></a>
+    <a data-view="theo_doi">👁 Theo dõi <span class="n" data-count="theo_doi"></span></a>
+    <div class="group">Bị loại</div>
+    <a data-view="trang_cu">⛔ Trang bán cũ <span class="n" data-count="trang_cu"></span></a>
+    <a data-view="cu">⌛ Video già <span class="n" data-count="cu"></span></a>
+    <div class="group">Thu thập</div>
+    <a data-view="scan">🔍 Quét từ khoá</a>
+    <a data-view="all">☰ Tất cả video <span class="n" data-count="all"></span></a>
+  </nav>
+</aside>
+<main>
+  <header><h1 id="title">Tổng quan</h1><input id="search" placeholder="Tìm theo nội dung, shop, từ khoá…"></header>
+  <section id="content"></section>
+</main>
+<div id="drawer" class="drawer hidden"></div>
+<footer id="logbar"><b>Nhật ký</b> <span id="current">Chưa chạy việc nào</span>
+  <button id="stopBtn" class="hidden">Dừng</button>
+  <pre id="log" class="hidden"></pre></footer>
+<script src="/static/app.js"></script>
+</body>
+</html>
