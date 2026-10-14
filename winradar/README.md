@@ -42,6 +42,18 @@ Các nhãn (ngưỡng sửa được trong `winradar/config.py`):
 
 Dữ liệu lưu trong thư mục `data/` (SQLite). Xoá thư mục này là làm lại từ đầu.
 
+### Chạy qua proxy (tuỳ chọn)
+
+Mở file **`proxy.txt`**, xoá dấu `#` ở một dòng và điền proxy của bạn, ví dụ:
+
+```
+http://user:pass@1.2.3.4:8080
+```
+
+Hỗ trợ `http://`, `https://`, `socks5://`. Lần quét sau, Nhật ký sẽ hiện "Dùng proxy …". Nên dùng
+proxy dân cư (residential) ở đúng quốc gia đang quét. Khi đổi proxy, chạy lại `DangNhapFacebook.bat`
+để Facebook thấy đăng nhập từ IP mới. Đừng đẩy file `proxy.txt` có mật khẩu lên GitHub.
+
 ## Giới hạn hiện tại (bản v1)
 
 - Facebook hay đổi giao diện. Tool đọc dữ liệu theo kiểu "tìm mọi object có `ad_archive_id`" nên

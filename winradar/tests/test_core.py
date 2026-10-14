@@ -101,3 +101,17 @@ def test_landing_check_records_errors():
     with httpx.Client(transport=httpx.MockTransport(handler)) as c:
         info = landing.check("https://down.example/products/x", c)
     assert info["error"] and info["created_ts"] is None
+
+
+def test_read_proxy(tmp_path, monkeypatch):
+    from winradar import scraper
+    monkeypatch.delenv("WINRADAR_PROXY", raising=False)
+    f = tmp_path / "proxy.txt"
+    monkeypatch.setattr(config, "PROXY_FILE", f)
+    assert scraper.read_proxy() is None
+    f.write_text("# chú thích\n# http://x:1\n", encoding="utf-8")
+    assert scraper.read_proxy() is None
+    f.write_text("# chú thích\nhttp://us%40er:p%3Ass@1.2.3.4:8080\n", encoding="utf-8")
+    assert scraper.read_proxy() == {"server": "http://1.2.3.4:8080", "username": "us@er", "password": "p:ss"}
+    monkeypatch.setenv("WINRADAR_PROXY", "5.6.7.8:3128")
+    assert scraper.read_proxy() == {"server": "http://5.6.7.8:3128"}

@@ -3,8 +3,9 @@
 Dùng hồ sơ trình duyệt riêng (data/browser-profile) nên chỉ cần đăng nhập Facebook 1 lần
 bằng "DangNhapFacebook.bat".
 """
+import os
 import random
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode, urlparse
 
 from playwright.sync_api import sync_playwright
 
@@ -28,10 +29,32 @@ def page_url(page_id, country):
     })
 
 
+def read_proxy():
+    """Đọc proxy từ biến môi trường WINRADAR_PROXY hoặc dòng đầu tiên (không phải chú thích) của proxy.txt."""
+    raw = os.environ.get("WINRADAR_PROXY", "").strip()
+    if not raw and config.PROXY_FILE.exists():
+        lines = [l.strip() for l in config.PROXY_FILE.read_text(encoding="utf-8-sig").splitlines()]
+        raw = next((l for l in lines if l and not l.startswith("#")), "")
+    if not raw:
+        return None
+    if "://" not in raw:
+        raw = "http://" + raw
+    u = urlparse(raw)
+    proxy = {"server": f"{u.scheme}://{u.hostname}:{u.port}" if u.port else f"{u.scheme}://{u.hostname}"}
+    if u.username:
+        proxy["username"] = unquote(u.username)
+        proxy["password"] = unquote(u.password or "")
+    return proxy
+
+
 def open_browser(p, headless=None):
     config.BROWSER_PROFILE.mkdir(parents=True, exist_ok=True)
+    proxy = read_proxy()
+    if proxy:
+        print(f"Dùng proxy {proxy['server']}", flush=True)
     return p.chromium.launch_persistent_context(
         str(config.BROWSER_PROFILE),
+        proxy=proxy,
         headless=config.HEADLESS if headless is None else headless,
         locale="en-US",
         viewport={"width": 1366, "height": 900},
