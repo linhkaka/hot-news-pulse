@@ -47,6 +47,13 @@ def read_proxy():
     return proxy
 
 
+def launch_options(headless):
+    """Chromium tự chọn (WINRADAR_CHROMIUM) hoặc Chromium đầy đủ do Playwright cài, kể cả khi chạy ẩn."""
+    if config.CHROMIUM_PATH:
+        return {"headless": headless, "executable_path": config.CHROMIUM_PATH}
+    return {"headless": headless, "channel": "chromium"}
+
+
 def open_browser(p, headless=None):
     config.BROWSER_PROFILE.mkdir(parents=True, exist_ok=True)
     proxy = read_proxy()
@@ -55,8 +62,7 @@ def open_browser(p, headless=None):
     return p.chromium.launch_persistent_context(
         str(config.BROWSER_PROFILE),
         proxy=proxy,
-        executable_path=config.CHROMIUM_PATH,
-        headless=config.HEADLESS if headless is None else headless,
+        **launch_options(config.HEADLESS if headless is None else headless),
         locale="en-US",
         viewport={"width": 1366, "height": 900},
     )

@@ -1,12 +1,6 @@
-import uvicorn
+import sys
 
-from . import config
-
-
-def main():
-    print(f"WinRadar đang chạy: http://{config.HOST}:{config.PORT}  (Ctrl+C để tắt)")
-    uvicorn.run("winradar.server:app", host=config.HOST, port=config.PORT, log_level="warning")
-
+from .app import main
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

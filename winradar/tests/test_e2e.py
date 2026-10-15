@@ -16,6 +16,9 @@ DAY = 86400
 
 
 def _chromium():
+    """Đường dẫn Chromium; "" = dùng Chromium mặc định của Playwright (bật bằng WINRADAR_E2E=1); None = bỏ qua."""
+    if os.environ.get("WINRADAR_E2E") == "1":
+        return os.environ.get("WINRADAR_CHROMIUM", "")
     if os.environ.get("WINRADAR_CHROMIUM"):
         return os.environ["WINRADAR_CHROMIUM"]
     found = glob.glob("/opt/pw-browsers/chromium-*/chrome-linux*/chrome")
@@ -105,11 +108,14 @@ window.addEventListener('scroll', async () => {{
     srv.shutdown()
 
 
-@pytest.mark.skipif(not _chromium(), reason="không có Chromium")
+@pytest.mark.skipif(_chromium() is None, reason="không có Chromium")
 def test_full_scan_against_fake_ad_library(tmp_path, monkeypatch, fake_facebook):
     monkeypatch.setenv("WINRADAR_DATA", str(tmp_path))
     monkeypatch.setenv("WINRADAR_HEADLESS", "1")
-    monkeypatch.setenv("WINRADAR_CHROMIUM", _chromium())
+    if _chromium():
+        monkeypatch.setenv("WINRADAR_CHROMIUM", _chromium())
+    else:
+        monkeypatch.delenv("WINRADAR_CHROMIUM", raising=False)
     monkeypatch.delenv("WINRADAR_PROXY", raising=False)
     from winradar import config
     importlib.reload(config)

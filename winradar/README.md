@@ -23,7 +23,21 @@ Các nhãn (ngưỡng sửa được trong `winradar/config.py`):
 - **Trang bán cũ** / **Video già**: bị loại vì bạn đã đến muộn.
 - **Theo dõi**: chưa đủ dữ kiện.
 
-## Cài đặt trên Windows (làm 1 lần)
+## Cách 1 (dễ nhất): file cài đặt WinRadar-Setup.exe
+
+1. Tải **`WinRadar-Setup.exe`** (trong mục **Releases** của repo, hoặc mục **Actions → WinRadar installer → Artifacts**).
+2. Bấm đúp để cài. Không cần cài Python, Chromium có sẵn bên trong, không cần quyền Admin.
+   Nếu Windows hiện "Windows protected your PC", bấm **More info → Run anyway** (file chưa ký số).
+3. Cuối bước cài, để tick **"Đăng nhập Facebook ngay"**, đăng nhập rồi đóng cửa sổ Chromium.
+4. Mở **WinRadar** từ Desktop hoặc menu Start. Cửa sổ đen là tool đang chạy; đóng nó là tắt tool.
+
+Trong menu Start → WinRadar còn có: **Đăng nhập Facebook**, **Xem demo**, **Thư mục dữ liệu và proxy**
+(chứa `proxy.txt`). Dữ liệu lưu ở `%LOCALAPPDATA%\WinRadar`, gỡ cài đặt không xoá dữ liệu.
+
+Tự đóng gói (cho lập trình viên): GitHub Actions `.github/workflows/winradar-installer.yml` tự build
+mỗi khi đổi code; đẩy tag `winradar-v1.0.0` để tạo Release kèm file cài.
+
+## Cách 2: chạy từ mã nguồn trên Windows (làm 1 lần)
 
 1. Cài **Python 3.11 trở lên** từ https://www.python.org/downloads/. Khi cài, nhớ **tick "Add python.exe to PATH"**.
 2. Tải thư mục `winradar` về máy (trên GitHub bấm **Code → Download ZIP**, rồi giải nén).

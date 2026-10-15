@@ -1,9 +1,13 @@
 """Mọi ngưỡng chấm điểm nằm ở đây. Không có "điểm AI": mỗi nhãn là một luật đọc được."""
 import os
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = Path(os.environ.get("WINRADAR_DATA", ROOT / "data"))
+# Bản cài đặt (.exe) nằm trong Program Files, không ghi được -> lưu dữ liệu vào %LOCALAPPDATA%\WinRadar
+FROZEN = getattr(sys, "frozen", False)
+_default_data = (Path(os.environ.get("LOCALAPPDATA", Path.home())) / "WinRadar") if FROZEN else ROOT / "data"
+DATA_DIR = Path(os.environ.get("WINRADAR_DATA", _default_data))
 DB_PATH = DATA_DIR / "winradar.db"
 THUMB_DIR = DATA_DIR / "thumbs"
 BROWSER_PROFILE = DATA_DIR / "browser-profile"
@@ -18,7 +22,7 @@ DIG_MAX_PAGES = 6              # đào sâu: số page tối đa soi cho 1 video
 DIG_MAX_ADS_PER_PAGE = 150
 # Proxy cho trình duyệt quét Facebook: ghi 1 dòng vào file proxy.txt cạnh ChayTool.bat,
 # dạng  http://user:pass@host:port  hoặc  socks5://host:port. Để trống = không dùng proxy.
-PROXY_FILE = ROOT / "proxy.txt"
+PROXY_FILE = (DATA_DIR if FROZEN else ROOT) / "proxy.txt"
 CHROMIUM_PATH = os.environ.get("WINRADAR_CHROMIUM") or None  # để trống = dùng Chromium do Playwright cài
 HEADLESS = os.environ.get("WINRADAR_HEADLESS", "0") == "1"  # mặc định hiện trình duyệt, ít bị chặn hơn
 

@@ -3,3 +3,6 @@ data/
 data_demo/
 __pycache__/
 .pytest_cache/
+build/
+dist/
+Output/
