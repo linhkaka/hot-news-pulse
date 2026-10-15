@@ -1,10 +1,10 @@
-"""Điểm khởi động của bản cài đặt WinRadar.exe.
+"""Điểm khởi động của bản cài đặt SnakemediaPOD.exe.
 
-  WinRadar.exe            chạy tool và mở trình duyệt
-  WinRadar.exe --login    mở Chromium để đăng nhập Facebook
-  WinRadar.exe --demo     chạy với dữ liệu giả (lưu riêng, không đụng dữ liệu thật)
-  WinRadar.exe --data     mở thư mục dữ liệu (chứa proxy.txt)
-  WinRadar.exe --selftest kiểm tra Chromium đi kèm có chạy được không
+  SnakemediaPOD.exe            chạy tool và mở trình duyệt
+  SnakemediaPOD.exe --login    mở Chromium để đăng nhập Facebook
+  SnakemediaPOD.exe --demo     chạy với dữ liệu giả (lưu riêng, không đụng dữ liệu thật)
+  SnakemediaPOD.exe --data     mở thư mục dữ liệu (chứa proxy.txt)
+  SnakemediaPOD.exe --selftest kiểm tra Chromium đi kèm có chạy được không
 """
 import os
 import socket
@@ -15,7 +15,7 @@ import webbrowser
 from pathlib import Path
 
 PROXY_TEMPLATE = (
-    "# Proxy cho WinRadar (tuy chon). Xoa dau # o 1 dong ben duoi va dien proxy cua ban:\n"
+    "# Proxy cho SNAKEMEDIA POD (tuy chon). Xoa dau # o 1 dong ben duoi va dien proxy cua ban:\n"
     "# http://user:pass@1.2.3.4:8080\n"
     "# socks5://1.2.3.4:1080\n"
 )
@@ -55,8 +55,8 @@ def main(argv=None):
         # Chromium được đóng gói ngay trong thư mục cài đặt
         os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", "0")
     if "--demo" in args:
-        base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "WinRadar-demo"
-        os.environ["WINRADAR_DATA"] = str(base)
+        base = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "SnakemediaPOD-demo"
+        os.environ["SNAKEPOD_DATA"] = str(base)
 
     from . import config  # import sau khi đã đặt biến môi trường
 
@@ -79,14 +79,14 @@ def main(argv=None):
 
     url = f"http://{config.HOST}:{config.PORT}"
     if _port_in_use(config.HOST, config.PORT):
-        print("WinRadar đã đang chạy, mở trình duyệt...")
+        print("SNAKEMEDIA POD đã đang chạy, mở trình duyệt...")
         webbrowser.open(url)
         return
 
     import uvicorn
     from .server import app
 
-    print(f"WinRadar đang chạy: {url}")
+    print(f"SNAKEMEDIA POD đang chạy: {url}")
     print(f"Dữ liệu lưu tại: {config.DATA_DIR}")
     print("ĐÓNG CỬA SỔ NÀY để tắt tool.")
     if "--no-browser" not in args:

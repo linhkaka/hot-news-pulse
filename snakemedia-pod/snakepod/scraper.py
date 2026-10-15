@@ -30,8 +30,8 @@ def page_url(page_id, country):
 
 
 def read_proxy():
-    """Đọc proxy từ biến môi trường WINRADAR_PROXY hoặc dòng đầu tiên (không phải chú thích) của proxy.txt."""
-    raw = os.environ.get("WINRADAR_PROXY", "").strip()
+    """Đọc proxy từ biến môi trường SNAKEPOD_PROXY hoặc dòng đầu tiên (không phải chú thích) của proxy.txt."""
+    raw = os.environ.get("SNAKEPOD_PROXY", "").strip()
     if not raw and config.PROXY_FILE.exists():
         lines = [l.strip() for l in config.PROXY_FILE.read_text(encoding="utf-8-sig").splitlines()]
         raw = next((l for l in lines if l and not l.startswith("#")), "")
@@ -48,7 +48,7 @@ def read_proxy():
 
 
 def launch_options(headless):
-    """Chromium tự chọn (WINRADAR_CHROMIUM) hoặc Chromium đầy đủ do Playwright cài, kể cả khi chạy ẩn."""
+    """Chromium tự chọn (SNAKEPOD_CHROMIUM) hoặc Chromium đầy đủ do Playwright cài, kể cả khi chạy ẩn."""
     if config.CHROMIUM_PATH:
         return {"headless": headless, "executable_path": config.CHROMIUM_PATH}
     return {"headless": headless, "channel": "chromium"}

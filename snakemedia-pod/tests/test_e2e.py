@@ -16,11 +16,11 @@ DAY = 86400
 
 
 def _chromium():
-    """Đường dẫn Chromium; "" = dùng Chromium mặc định của Playwright (bật bằng WINRADAR_E2E=1); None = bỏ qua."""
-    if os.environ.get("WINRADAR_E2E") == "1":
-        return os.environ.get("WINRADAR_CHROMIUM", "")
-    if os.environ.get("WINRADAR_CHROMIUM"):
-        return os.environ["WINRADAR_CHROMIUM"]
+    """Đường dẫn Chromium; "" = dùng Chromium mặc định của Playwright (bật bằng SNAKEPOD_E2E=1); None = bỏ qua."""
+    if os.environ.get("SNAKEPOD_E2E") == "1":
+        return os.environ.get("SNAKEPOD_CHROMIUM", "")
+    if os.environ.get("SNAKEPOD_CHROMIUM"):
+        return os.environ["SNAKEPOD_CHROMIUM"]
     found = glob.glob("/opt/pw-browsers/chromium-*/chrome-linux*/chrome")
     return found[0] if found else None
 
@@ -110,17 +110,17 @@ window.addEventListener('scroll', async () => {{
 
 @pytest.mark.skipif(_chromium() is None, reason="không có Chromium")
 def test_full_scan_against_fake_ad_library(tmp_path, monkeypatch, fake_facebook):
-    monkeypatch.setenv("WINRADAR_DATA", str(tmp_path))
-    monkeypatch.setenv("WINRADAR_HEADLESS", "1")
+    monkeypatch.setenv("SNAKEPOD_DATA", str(tmp_path))
+    monkeypatch.setenv("SNAKEPOD_HEADLESS", "1")
     if _chromium():
-        monkeypatch.setenv("WINRADAR_CHROMIUM", _chromium())
+        monkeypatch.setenv("SNAKEPOD_CHROMIUM", _chromium())
     else:
-        monkeypatch.delenv("WINRADAR_CHROMIUM", raising=False)
-    monkeypatch.delenv("WINRADAR_PROXY", raising=False)
-    from winradar import config
+        monkeypatch.delenv("SNAKEPOD_CHROMIUM", raising=False)
+    monkeypatch.delenv("SNAKEPOD_PROXY", raising=False)
+    from snakepod import config
     importlib.reload(config)
     monkeypatch.setattr(config, "PROXY_FILE", tmp_path / "proxy.txt")
-    from winradar import analyze, db, jobs, landing, scraper
+    from snakepod import analyze, db, jobs, landing, scraper
     for m in (db, analyze, landing, scraper, jobs):
         importlib.reload(m)
     monkeypatch.setattr(scraper, "BASE", f"http://127.0.0.1:{fake_facebook.port}/ads/library/")

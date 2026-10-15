@@ -7,8 +7,7 @@ thì cũng không giấu được tuổi thật.
 import time
 from collections import Counter, defaultdict
 
-from . import config
-from .imagehash import distance
+from . import config, pod
 
 DAY = 86400
 
@@ -97,8 +96,9 @@ def summarize(cid, ads, landings, now=None):
     link_counts = Counter(a["link_url"] for a in ads if a.get("link_url"))
     main_link = link_counts.most_common(1)[0][0] if link_counts else None
     main_landing = landings.get(main_link) if main_link else None
-    land_ts = [l["created_ts"] for u in link_counts if (l := landings.get(u)) and l.get("created_ts")]
-    landing_first_ts = min(land_ts) if land_ts else None
+    land = sorted(((l["created_ts"], l.get("date_source")) for u in link_counts
+                   if (l := landings.get(u)) and l.get("created_ts")), key=lambda x: x[0])
+    landing_first_ts, date_source = land[0] if land else (None, None)
     landing_age = _days(landing_first_ts, now)
     page_old = bool(landing_first_ts and first_ts and
                     first_ts - landing_first_ts > config.PAGE_OLDER_THAN_VIDEO * DAY)
@@ -108,6 +108,15 @@ def summarize(cid, ads, landings, now=None):
     rep = max(ads, key=lambda a: (bool(a.get("video_url")), bool(a.get("thumb_path")), a.get("is_active") or 0,
                                   _w(a)))
     title = rep.get("body") or rep.get("title") or (main_landing or {}).get("title") or "(không có nội dung)"
+
+    # POD: phân loại từ nội dung QC + link + tiêu đề trang bán
+    texts = {a.get(k) for a in ads for k in ("body", "title", "link_url") if a.get(k)}
+    texts |= {l.get("title") for u in link_counts if (l := landings.get(u)) and l.get("title")}
+    product_type, niches, personalized = pod.classify(" \n ".join(sorted(texts)))
+    markers = {m for u in link_counts if (l := landings.get(u)) and l.get("pod_markers")
+               for m in l["pod_markers"].split(",")}
+    platform = (main_landing or {}).get("platform")
+    is_pod = bool(product_type or personalized or markers or platform in pod.POD_PLATFORMS)
     return {
         "cid": cid,
         "label": label,
@@ -120,7 +129,13 @@ def summarize(cid, ads, landings, now=None):
         "ad_library_url": f"https://www.facebook.com/ads/library/?id={rep['ad_id']}",
         "main_link": main_link,
         "price": (main_landing or {}).get("price"),
-        "platform": (main_landing or {}).get("platform"),
+        "platform": platform,
+        "product_type": product_type,
+        "niches": niches,
+        "personalized": personalized,
+        "pod_markers": sorted(markers),
+        "is_pod": is_pod,
+        "landing_date_source": date_source,
         "first_ts": first_ts,
         "video_age_days": round(video_age, 1) if video_age is not None else None,
         "landing_created_ts": landing_first_ts,

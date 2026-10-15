@@ -4,16 +4,16 @@ import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-# Bản cài đặt (.exe) nằm trong Program Files, không ghi được -> lưu dữ liệu vào %LOCALAPPDATA%\WinRadar
+# Bản cài đặt (.exe) nằm trong Program Files, không ghi được -> lưu dữ liệu vào %LOCALAPPDATA%\SnakemediaPOD
 FROZEN = getattr(sys, "frozen", False)
-_default_data = (Path(os.environ.get("LOCALAPPDATA", Path.home())) / "WinRadar") if FROZEN else ROOT / "data"
-DATA_DIR = Path(os.environ.get("WINRADAR_DATA", _default_data))
-DB_PATH = DATA_DIR / "winradar.db"
+_default_data = (Path(os.environ.get("LOCALAPPDATA", Path.home())) / "SnakemediaPOD") if FROZEN else ROOT / "data"
+DATA_DIR = Path(os.environ.get("SNAKEPOD_DATA", _default_data))
+DB_PATH = DATA_DIR / "snakepod.db"
 THUMB_DIR = DATA_DIR / "thumbs"
 BROWSER_PROFILE = DATA_DIR / "browser-profile"
 
 HOST = "127.0.0.1"
-PORT = int(os.environ.get("WINRADAR_PORT", "8765"))
+PORT = int(os.environ.get("SNAKEPOD_PORT", "8765"))
 
 # Quét
 DEFAULT_COUNTRY = "US"
@@ -23,8 +23,10 @@ DIG_MAX_ADS_PER_PAGE = 150
 # Proxy cho trình duyệt quét Facebook: ghi 1 dòng vào file proxy.txt cạnh ChayTool.bat,
 # dạng  http://user:pass@host:port  hoặc  socks5://host:port. Để trống = không dùng proxy.
 PROXY_FILE = (DATA_DIR if FROZEN else ROOT) / "proxy.txt"
-CHROMIUM_PATH = os.environ.get("WINRADAR_CHROMIUM") or None  # để trống = dùng Chromium do Playwright cài
-HEADLESS = os.environ.get("WINRADAR_HEADLESS", "0") == "1"  # mặc định hiện trình duyệt, ít bị chặn hơn
+CHROMIUM_PATH = os.environ.get("SNAKEPOD_CHROMIUM") or None  # để trống = dùng Chromium do Playwright cài
+HEADLESS = os.environ.get("SNAKEPOD_HEADLESS", "0") == "1"  # mặc định hiện trình duyệt, ít bị chặn hơn
+
+AUTO_SCAN_HOUR = 1             # giờ tự quét mỗi đêm (giờ máy tính), sửa được trên giao diện
 
 # Gom QC cùng 1 video: 2 ảnh thumbnail khác nhau <= N bit (dHash 64 bit) coi như cùng video
 DHASH_MAX_DISTANCE = 6

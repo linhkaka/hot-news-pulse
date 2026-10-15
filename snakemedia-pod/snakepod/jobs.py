@@ -3,7 +3,7 @@ import collections
 import queue
 import threading
 import time
-from pathlib import Path
+from datetime import datetime
 
 import httpx
 
@@ -25,8 +25,12 @@ def status():
 
 
 def submit(kind, title, fn):
+    """Xếp việc vào hàng đợi. Bỏ qua nếu việc trùng tên đang chờ/đang chạy."""
+    if title in _state["pending"] or title == _state["current"]:
+        return False
     _state["pending"].append(title)
     _queue.put((kind, title, fn))
+    return True
 
 
 def stop_current():
@@ -52,6 +56,7 @@ def _worker():
 
 def start_worker():
     threading.Thread(target=_worker, daemon=True).start()
+    threading.Thread(target=_scheduler, daemon=True).start()
 
 
 def should_stop():
@@ -114,9 +119,68 @@ def keyword_job(keyword, country, max_ads):
         ads = scraper.scan_keyword(keyword, country, max_ads, log, should_stop)
         log(f"Đọc được {len(ads)} QC")
         db.upsert_ads(ads, keyword)
+        db.touch_watch_keyword(keyword)
         process_after_scan()
         return len(ads)
     return run
+
+
+def follow_job(kind, key, country):
+    """Quét lại 1 page (mọi QC video của page) hoặc 1 shop (tìm domain trong thư viện QC)."""
+    from . import scraper
+
+    def run():
+        if kind == "page":
+            ads = scraper.scan_pages([key], country, config.DIG_MAX_ADS_PER_PAGE, log, should_stop)
+        else:
+            log(f"Quét shop {key}")
+            ads = scraper.scan_keyword(key, country, config.DEFAULT_MAX_ADS, log, should_stop)
+            ads = [a for a in ads if a.get("domain") == key] or ads
+        log(f"Đọc được {len(ads)} QC")
+        db.upsert_ads(ads)
+        db.touch_follow(kind, key)
+        process_after_scan()
+        return len(ads)
+    return run
+
+
+def queue_all_watched(reason):
+    """Xếp hàng quét lại mọi từ khoá đã lưu và mọi page/shop đang theo dõi."""
+    country = config.DEFAULT_COUNTRY
+    n = 0
+    for w in db.list_watch_keywords():
+        n += submit("keyword", f"Quét '{w['keyword']}'",
+                    keyword_job(w["keyword"], w["country"] or country, config.DEFAULT_MAX_ADS))
+    for f in db.list_follows():
+        n += submit("follow", f"Theo dõi {f['kind']} {f['name'] or f['key']}", follow_job(f["kind"], f["key"], country))
+    log(f"{reason}: xếp {n} việc quét")
+    return n
+
+
+def auto_settings():
+    return {"enabled": True, "hour": config.AUTO_SCAN_HOUR, "last_date": None, **db.get_setting("auto", {})}
+
+
+def scheduler_tick(now=None):
+    """Tới giờ tự quét (mặc định 1h sáng) và hôm nay chưa quét -> xếp hàng quét. Trả về True nếu đã xếp."""
+    s = auto_settings()
+    now = now or datetime.now()
+    today = now.strftime("%Y-%m-%d")
+    if s["enabled"] and now.hour == int(s["hour"]) and s["last_date"] != today:
+        db.set_setting("auto", {**s, "last_date": today})
+        queue_all_watched(f"Tự quét lúc {s['hour']}h")
+        return True
+    return False
+
+
+def _scheduler():
+    """Mỗi 30 giây kiểm tra giờ tự quét. Tool phải đang mở."""
+    while True:
+        try:
+            scheduler_tick()
+        except Exception as e:
+            log(f"Lỗi lịch tự quét: {e}")
+        time.sleep(30)
 
 
 def dig_job(cid, country):

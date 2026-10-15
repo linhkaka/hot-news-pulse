@@ -40,13 +40,33 @@ CREATE TABLE IF NOT EXISTS landings (
     title TEXT,
     price TEXT,
     checked_ts INTEGER,
-    error TEXT
+    error TEXT,
+    date_source TEXT,
+    pod_markers TEXT
 );
 CREATE TABLE IF NOT EXISTS videos (
     cid TEXT PRIMARY KEY,
     label TEXT,
     sort_key REAL,
     data TEXT
+);
+CREATE TABLE IF NOT EXISTS follows (
+    kind TEXT,            -- 'page' (page Facebook) hoặc 'shop' (domain trang bán)
+    key TEXT,
+    name TEXT,
+    added_ts INTEGER,
+    last_scan_ts INTEGER,
+    PRIMARY KEY (kind, key)
+);
+CREATE TABLE IF NOT EXISTS watch_keywords (
+    keyword TEXT PRIMARY KEY,
+    country TEXT,
+    added_ts INTEGER,
+    last_scan_ts INTEGER
+);
+CREATE TABLE IF NOT EXISTS settings (
+    key TEXT PRIMARY KEY,
+    value TEXT
 );
 CREATE TABLE IF NOT EXISTS scans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -68,9 +88,17 @@ def connect():
     return conn
 
 
+# Cột thêm ở các bản sau: CSDL cũ được nâng cấp tự động, không mất dữ liệu
+_MIGRATIONS = [("landings", "date_source", "TEXT"), ("landings", "pod_markers", "TEXT")]
+
+
 def init():
     with connect() as conn:
         conn.executescript(SCHEMA)
+        for table, col, typ in _MIGRATIONS:
+            cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
+            if col not in cols:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
 
 
 def upsert_ads(ads, keyword=None):
@@ -124,9 +152,10 @@ def save_landing(info):
     with _lock, connect() as conn:
         conn.execute(
             """INSERT OR REPLACE INTO landings (url, final_url, domain, platform, created_ts, published_ts,
-                   title, price, checked_ts, error)
+                   title, price, checked_ts, error, date_source, pod_markers)
                VALUES (:url, :final_url, :domain, :platform, :created_ts, :published_ts,
-                   :title, :price, :checked_ts, :error)""", info)
+                   :title, :price, :checked_ts, :error, :date_source, :pod_markers)""",
+            {"date_source": None, "pod_markers": None, **info})
 
 
 def landings_by_url():
@@ -178,3 +207,81 @@ def finish_scan(scan_id, status, n_ads=0, error=None):
 def list_scans(limit=50):
     with connect() as conn:
         return [dict(r) for r in conn.execute("SELECT * FROM scans ORDER BY id DESC LIMIT ?", (limit,))]
+
+
+# ---- theo dõi page / shop ----
+
+def add_follow(kind, key, name=None):
+    with _lock, connect() as conn:
+        conn.execute("INSERT OR IGNORE INTO follows (kind, key, name, added_ts) VALUES (?, ?, ?, ?)",
+                     (kind, key, name, int(time.time())))
+
+
+def remove_follow(kind, key):
+    with _lock, connect() as conn:
+        conn.execute("DELETE FROM follows WHERE kind=? AND key=?", (kind, key))
+
+
+def list_follows():
+    with connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM follows ORDER BY added_ts DESC")]
+
+
+def touch_follow(kind, key):
+    with _lock, connect() as conn:
+        conn.execute("UPDATE follows SET last_scan_ts=? WHERE kind=? AND key=?", (int(time.time()), kind, key))
+
+
+# ---- từ khoá tự quét ----
+
+def add_watch_keyword(keyword, country):
+    with _lock, connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO watch_keywords (keyword, country, added_ts, last_scan_ts) "
+                     "VALUES (?, ?, ?, (SELECT last_scan_ts FROM watch_keywords WHERE keyword=?))",
+                     (keyword, country, int(time.time()), keyword))
+
+
+def remove_watch_keyword(keyword):
+    with _lock, connect() as conn:
+        conn.execute("DELETE FROM watch_keywords WHERE keyword=?", (keyword,))
+
+
+def list_watch_keywords():
+    with connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM watch_keywords ORDER BY keyword")]
+
+
+def touch_watch_keyword(keyword):
+    with _lock, connect() as conn:
+        conn.execute("UPDATE watch_keywords SET last_scan_ts=? WHERE keyword=?", (int(time.time()), keyword))
+
+
+# ---- cài đặt ----
+
+def get_setting(key, default=None):
+    with connect() as conn:
+        r = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        return json.loads(r[0]) if r else default
+
+
+def set_setting(key, value):
+    with _lock, connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, json.dumps(value)))
+
+
+# ---- thống kê theo shop / page ----
+
+def ads_where(column, value):
+    assert column in ("page_id", "domain")
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(f"SELECT * FROM ads WHERE {column}=?", (value,))]
+
+
+def shop_rows():
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            """SELECT a.domain, COUNT(*) AS ads, SUM(a.is_active) AS active, MIN(a.start_ts) AS first_ts,
+                      MAX(a.start_ts) AS last_ts, COUNT(DISTINCT a.page_id) AS pages,
+                      MAX(l.platform) AS platform, MAX(l.pod_markers) AS pod_markers
+               FROM ads a LEFT JOIN landings l ON l.url = a.link_url
+               WHERE a.domain IS NOT NULL GROUP BY a.domain ORDER BY active DESC, ads DESC""")]
