@@ -19,6 +19,7 @@ DIG_MAX_ADS_PER_PAGE = 150
 # Proxy cho trình duyệt quét Facebook: ghi 1 dòng vào file proxy.txt cạnh ChayTool.bat,
 # dạng  http://user:pass@host:port  hoặc  socks5://host:port. Để trống = không dùng proxy.
 PROXY_FILE = ROOT / "proxy.txt"
+CHROMIUM_PATH = os.environ.get("WINRADAR_CHROMIUM") or None  # để trống = dùng Chromium do Playwright cài
 HEADLESS = os.environ.get("WINRADAR_HEADLESS", "0") == "1"  # mặc định hiện trình duyệt, ít bị chặn hơn
 
 # Gom QC cùng 1 video: 2 ảnh thumbnail khác nhau <= N bit (dHash 64 bit) coi như cùng video

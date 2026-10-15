@@ -55,6 +55,7 @@ def open_browser(p, headless=None):
     return p.chromium.launch_persistent_context(
         str(config.BROWSER_PROFILE),
         proxy=proxy,
+        executable_path=config.CHROMIUM_PATH,
         headless=config.HEADLESS if headless is None else headless,
         locale="en-US",
         viewport={"width": 1366, "height": 900},
