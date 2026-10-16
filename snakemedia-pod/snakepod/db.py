@@ -2,6 +2,7 @@ import json
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 
 from . import config
 
@@ -131,11 +132,21 @@ CREATE TABLE IF NOT EXISTS scans (
 """
 
 
+@contextmanager
 def connect():
+    """Mở kết nối, lưu (commit) khi xong hoặc huỷ khi lỗi, và LUÔN đóng kết nối.
+
+    `with sqlite3.connect()` của Python chỉ commit chứ không đóng; trên Windows file CSDL còn mở thì
+    bị khoá (không xoá/đổi tên được), nên phải tự đóng.
+    """
     config.DATA_DIR.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(config.DB_PATH, check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
 
 
 # Cột thêm ở các bản sau: CSDL cũ được nâng cấp tự động, không mất dữ liệu

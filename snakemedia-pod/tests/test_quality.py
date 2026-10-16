@@ -219,3 +219,24 @@ def test_notify_api_and_pagination(env, monkeypatch):
         assert len(vir["items"]) == 2 and vir["total"] > 2
         assert c.get("/api/diag").json() == []
         assert c.get("/api/diag/../../x/download").status_code == 404
+
+
+def test_db_connections_are_closed(env):
+    """Windows khoá file đang mở: mọi kết nối phải đóng sau khối with (demo cần xoá được file CSDL)."""
+    import sqlite3
+    from snakepod import config, db
+    with db.connect() as conn:
+        conn.execute("SELECT 1")
+    with pytest.raises(sqlite3.ProgrammingError):
+        conn.execute("SELECT 1")
+    with pytest.raises(RuntimeError):            # lỗi giữa chừng: vẫn đóng, không lưu dở
+        with db.connect() as conn2:
+            conn2.execute("INSERT INTO settings (key, value) VALUES ('x', '1')")
+            raise RuntimeError("boom")
+    with pytest.raises(sqlite3.ProgrammingError):
+        conn2.execute("SELECT 1")
+    assert db.get_setting("x") is None
+    from snakepod import demo
+    demo.main()
+    demo.main()                                   # chạy lại: phải xoá được file CSDL demo cũ
+    assert config.DB_PATH.exists()
