@@ -16,14 +16,23 @@ const enc = encodeURIComponent;
 const act = (name, ...args) => `data-act="${name}" data-args="${esc(JSON.stringify(args))}"`;
 const LABEL = {sap_win: ["Sắp WIN", "p"], win: ["Video Win", "g"], scale: ["Video scale", ""], theo_doi: ["Chờ thêm dữ liệu", ""],
   trang_cu: ["Trang bán cũ", "r"], cu: ["Video già", "r"]};
-const TITLES = {overview: "Tổng quan", scan: "Quét từ khoá", all: "Tất cả video", niches: "Niche POD",
+const TITLES = {viral: "Video viral", spread: "QC Facebook đang lan nhanh", overview: "Tổng quan", scan: "Quét từ khoá", all: "Tất cả video", niches: "Niche POD",
   follows: "Theo dõi đặc biệt", keywords: "Tự quét mỗi đêm", shops: "Kho shop"};
 const DATE_SOURCE = {api: "dữ liệu sản phẩm", uuid: "ước tính từ mã sản phẩm", anh: "ước tính từ ảnh sản phẩm"};
 const POD_KEYWORDS = ["personalized dog shirt", "custom name mug", "personalized ornament", "nurse shirt", "teacher mug",
   "grandma sweatshirt", "memorial canvas", "custom pet portrait", "fishing shirt", "veteran flag", "halloween doormat",
   "christmas blanket"];
 
-let view = location.hash.slice(1) || "overview", openCid = null;
+let view = location.hash.slice(1) || "overview", openCid = null, openVid = null;
+const viralFilters = {platform: "", label: "", sort: "vph"};
+const VLABEL = {dang_no: ["Đang nổ", "r"], viral: ["Viral", "p"], dang_len: ["Đang lên", "g"], binh_thuong: ["Bình thường", ""],
+  top_ads: ["Top Ads", "o"]};
+const SORTS = {vph: "Xếp: xem/giờ", views: "Xếp: lượt xem", likes: "Xếp: lượt thích", engagement: "Xếp: tương tác",
+  new: "Xếp: mới nhất"};
+const PLATFORM = {tiktok: "TikTok", tiktok_ads: "TikTok Top Ads", fb_reels: "Facebook Reels"};
+const num = n => n == null ? "?" : n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M"
+  : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n);
+const cover = v => v.cover_path ? `/thumbs/${encodeURIComponent(v.cover_path)}` : (v.cover_url || "");
 // Bộ lọc dùng chung cho các màn hình danh sách video
 const filters = {product_type: "", niche: "", pod: false, page_id: "", shop: "", scopeName: ""};
 
@@ -57,6 +66,7 @@ function podChips(v) {
 function meta(v) {
   const parts = [];
   if (v.price) parts.push(`$${esc(v.price)}`);
+  if (view === "spread") parts.push(`<b class="green">+${v.ads_new_48h} QC · +${v.shops_new_48h} shop mới / 48h</b>`);
   parts.push(`video ${days(v.video_age_days)}`);
   if (v.landing_age_days != null) parts.push(`<span class="${v.page_old ? "red" : ""}">URL ${days(v.landing_age_days)}${v.landing_date_source && v.landing_date_source !== "api" ? "*" : ""}</span>`);
   parts.push(`${v.pages_active}/${v.pages_total} page`, `${v.shops_active}/${v.shops_total} shop`, `${v.ads_per_day} QC/ngày`);
@@ -82,8 +92,8 @@ function filterBar(facets) {
   </div>`;
 }
 
-async function renderList(label) {
-  const p = new URLSearchParams();
+async function renderList(label, extra = {}) {
+  const p = new URLSearchParams(extra);
   const q = $("#search").value.trim();
   if (label) p.set("label", label);
   if (q) p.set("q", q);
@@ -91,18 +101,129 @@ async function renderList(label) {
   if (filters.pod) p.set("pod", "true");
   const {items, facets} = await api("/api/videos?" + p);
   const bar = filterBar(facets);
-  if (!items.length) return bar + `<div class="list"><div class="empty">Chưa có video nào ở mục này.<br>Vào <a onclick="setView('scan')"><b>Quét từ khoá</b></a> để bắt đầu.</div></div>`;
-  return bar + `<div class="list">${items.map(row).join("")}</div>`;
+  if (extra.spread) $("#cnt-spread").textContent = items.length;
+  const note = extra.spread ? `<p class="note">Video có ≥ 5 QC mới hoặc ≥ 2 shop mới chép trong 48 giờ qua (sửa trong config.py). Đây là dấu hiệu một video đang được nhiều người đổ tiền cùng lúc.</p>` : "";
+  if (!items.length) return note + bar + `<div class="list"><div class="empty">Chưa có video nào ở mục này.<br>Vào <a onclick="setView('scan')"><b>Quét từ khoá</b></a> để bắt đầu.</div></div>`;
+  return note + bar + `<div class="list">${items.map(row).join("")}</div>`;
 }
 
+// ---------------- Video viral ----------------
+
+function socialMeta(v) {
+  const parts = [`<span class="chip">${esc(PLATFORM[v.platform] || v.platform)}</span>`];
+  if (v.platform === "tiktok_ads") {
+    if (v.likes != null) parts.push(`❤ ${num(v.likes)}`);
+    if (v.extra.ctr != null) parts.push(`CTR ${esc(v.extra.ctr)}`);
+    if (v.extra.cost != null) parts.push(`ngân sách mức ${esc(v.extra.cost)}`);
+    if (v.extra.industry_key) parts.push(esc(v.extra.industry_key));
+  } else {
+    parts.push(`<b>${num(v.views)}</b> xem`, `<b>${num(v.vph)}</b>/giờ${v.recent_vph != null ? " (thật)" : ""}`,
+      `${days(v.age_days)}`);
+    if (v.engagement != null) parts.push(`tương tác ${v.engagement}%`);
+    if (v.share_rate != null) parts.push(`chia sẻ ${v.share_rate}%`);
+  }
+  if (v.author) parts.push("@" + esc(v.author));
+  return parts.join(" · ") + podChips(v);
+}
+
+function socialRow(v) {
+  const img = cover(v) ? `<img loading="lazy" src="${esc(cover(v))}">` : `<div class="ph"></div>`;
+  const [ln, cls] = VLABEL[v.label] || [v.label, ""];
+  return `<div class="row ${v.vid === openVid ? "on" : ""}" data-vid="${esc(v.vid)}">${img}
+    <div style="min-width:0"><div class="t"><span class="chip ${cls}" style="margin:0 6px 0 0">${ln}</span>${esc(v.caption || "(không có mô tả)")}</div>
+    <div class="m">${socialMeta(v)}</div>
+    ${v.niches && v.niches.length ? `<div class="m">🎯 ${v.niches.map(esc).join(", ")}</div>` : ""}</div></div>`;
+}
+
+async function renderViral() {
+  const p = new URLSearchParams({sort: viralFilters.sort});
+  const q = $("#search").value.trim();
+  if (q) p.set("q", q);
+  for (const k of ["platform", "label"]) if (viralFilters[k]) p.set(k, viralFilters[k]);
+  for (const k of ["product_type", "niche"]) if (filters[k]) p.set(k, filters[k]);
+  if (filters.pod) p.set("pod", "true");
+  const [res, kws] = await Promise.all([api("/api/viral?" + p), api("/api/viral/keywords")]);
+  const {items, facets, counts} = res;
+  $("#cnt-viral").textContent = (counts.dang_no || 0) + (counts.viral || 0);
+  const opt = (obj, cur, all) => `<option value="">${all}</option>` + Object.entries(obj).map(([k, n]) =>
+    `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(n)}</option>`).join("");
+  const fopt = (list, cur) => list.map(x => `<option value="${esc(x.name)}" ${x.name === cur ? "selected" : ""}>${esc(x.name)} (${x.count})</option>`).join("");
+  const form = `<form class="scan" id="viralForm">
+      <select name="platform"><option value="tiktok">TikTok (tự nhiên)</option><option value="tiktok_ads">TikTok Top Ads</option>
+        <option value="fb_reels">Facebook Reels (thử nghiệm)</option></select>
+      <input name="keyword" placeholder="Từ khoá hoặc #hashtag (Top Ads có thể để trống)">
+      <input name="country" value="US" size="3" title="Quốc gia">
+      <select name="period" title="Top Ads: khoảng thời gian"><option value="7">7 ngày</option><option value="30">30 ngày</option><option value="180">180 ngày</option></select>
+      <label class="note"><input type="checkbox" name="save" checked> Tự quét mỗi đêm</label>
+      <button class="primary">Quét</button></form>
+    <p class="note">TikTok và Facebook Reels cần đăng nhập 1 lần (menu Start → "Đăng nhập TikTok" / "Đăng nhập Facebook").
+    Mỗi lần quét lưu lại số liệu, nên từ lần quét thứ 2 tool tính được <b>tốc độ tăng thật</b> (xem/giờ giữa 2 lần quét).</p>
+    ${kws.length ? `<div class="chips">${kws.map(k => `<span class="chip">${esc(PLATFORM[k.platform])}: ${esc(k.keyword || "tất cả")}
+      <a ${act("removeViralKw", k.platform, k.keyword)} title="Bỏ tự quét"> ✕</a></span>`).join("")}</div>` : ""}`;
+  const labelChips = `<div class="chips">${Object.entries(VLABEL).map(([k, [n, c]]) =>
+    `<span class="chip ${c}" ${act("viralFilter", "label", viralFilters.label === k ? "" : k)} style="${viralFilters.label === k ? "outline:2px solid currentColor" : ""}">${n} (${counts[k] || 0})</span>`).join("")}</div>`;
+  const bar = `<div class="filters">
+    <select onchange="viralFilters.platform=this.value;render()">${opt(PLATFORM, viralFilters.platform, "Mọi nền tảng")}</select>
+    <select onchange="filterBy('product_type', this.value)"><option value="">Mọi loại sản phẩm</option>${fopt(facets.product_types, filters.product_type)}</select>
+    <select onchange="filterBy('niche', this.value)"><option value="">Mọi niche</option>${fopt(facets.niches, filters.niche)}</select>
+    <label><input type="checkbox" ${filters.pod ? "checked" : ""} onchange="filterBy('pod', this.checked)"> Chỉ POD</label>
+    <select onchange="viralFilters.sort=this.value;render()">${Object.entries(SORTS).map(([k, n]) =>
+      `<option value="${k}" ${k === viralFilters.sort ? "selected" : ""}>${n}</option>`).join("")}</select>
+  </div>`;
+  const list = items.length ? `<div class="list">${items.map(socialRow).join("")}</div>`
+    : `<div class="list"><div class="empty">Chưa có video viral nào. Nhập từ khoá ở trên rồi bấm Quét.</div></div>`;
+  return form + labelChips + bar + list;
+}
+
+async function openSocial(vid) {
+  openVid = vid; openCid = null;
+  document.querySelectorAll(".row").forEach(r => r.classList.toggle("on", r.dataset.vid === vid));
+  const v = await api(`/api/viral/${enc(vid)}`);
+  const [ln, cls] = VLABEL[v.label] || [v.label, ""];
+  const img = cover(v) ? `<img class="hero" src="${esc(cover(v))}">` : `<div class="hero"></div>`;
+  const kv = (k, val) => `<div class="kv"><span>${k}</span><b>${val}</b></div>`;
+  const ex = v.extra || {};
+  $("#drawer").innerHTML = `<button class="x" onclick="closeDrawer()">✕</button>${img}
+    <h2>${esc(v.caption || "(không có mô tả)")}</h2>
+    <div><span class="chip ${cls}">${ln}</span><span class="chip">${esc(PLATFORM[v.platform])}</span>${podChips(v)}
+      <span class="note"> · ${v.author ? "@" + esc(v.author) + " · " : ""}quét ${ago(v.last_seen)}</span></div>
+    <div class="btns">
+      <a class="btn primary" target="_blank" rel="noopener" href="${esc(v.url)}">▶ Mở video</a>
+      ${v.video_url ? `<a class="btn" target="_blank" rel="noopener" href="${esc(v.video_url)}">Tải file video</a>` : `<span></span>`}
+    </div>
+    <h3>Số liệu</h3>
+    ${v.platform === "tiktok_ads" ? kv("Lượt thích", num(v.likes)) + (ex.ctr != null ? kv("CTR", esc(ex.ctr)) : "")
+        + (ex.cost != null ? kv("Mức ngân sách", esc(ex.cost)) : "") + (ex.brand_name ? kv("Thương hiệu", esc(ex.brand_name)) : "")
+        + (ex.industry_key ? kv("Ngành", esc(ex.industry_key)) : "") + (ex.objective_key ? kv("Mục tiêu QC", esc(ex.objective_key)) : "")
+      : kv("Lượt xem", num(v.views)) + kv("Xem mỗi giờ", `${num(v.vph)}${v.recent_vph != null ? " <small class='note'>(giữa 2 lần quét)</small>" : " <small class='note'>(trung bình)</small>"}`)
+        + kv("Tuổi video", v.created_ts ? `${fmtDate(v.created_ts)} · ${days(v.age_days)}` : "chưa rõ")
+        + kv("Thích / Bình luận / Chia sẻ", `${num(v.likes)} / ${num(v.comments)} / ${num(v.shares)}`)
+        + (v.engagement != null ? kv("Tỉ lệ tương tác / chia sẻ", `${v.engagement}% / ${v.share_rate}%`) : "")}
+    <h3>POD</h3>
+    ${kv("Loại sản phẩm", esc(v.product_type || "chưa rõ") + (v.personalized ? " · cá nhân hoá" : ""))}
+    ${kv("Niche", v.niches && v.niches.length ? v.niches.map(esc).join(", ") : "chưa rõ")}
+    <h3>Vì sao có nhãn này</h3>
+    ${v.checks.map(c => `<div class="check">${c.ok === true ? "✅" : c.ok === false ? "❌" : "➖"} ${esc(c.text)}</div>`).join("")}
+    ${v.platform !== "tiktok_ads" && v.snapshots.length ? `<h3>Các lần quét (${v.snapshots.length})</h3>
+      <table><tr><th>Lúc</th><th>Lượt xem</th><th>Thích</th><th>Chia sẻ</th></tr>${v.snapshots.slice().reverse().map(s =>
+        `<tr><td>${new Date(s.ts * 1000).toLocaleString()}</td><td>${num(s.views)}</td><td>${num(s.likes)}</td><td>${num(s.shares)}</td></tr>`).join("")}</table>` : ""}`;
+  $("#drawer").classList.remove("hidden");
+}
+
+async function removeViralKw(platform, keyword) { await del(`/api/viral/keywords/${platform}/${enc(keyword || " ")}`); render(); }
+
 async function renderOverview() {
-  const [s, auto, niches] = await Promise.all([refreshCounts(), api("/api/autoscan"), api("/api/niches")]);
+  const [s, auto, niches, vir] = await Promise.all([refreshCounts(), api("/api/autoscan"), api("/api/niches"),
+    api("/api/viral").catch(() => ({counts: {}}))]);
   const cards = s.labels.filter(l => l.key !== "theo_doi").map(l => `<a class="card" onclick="setView('${l.key}')"><div class="big">${l.count}</div>${l.name}</a>`).join("");
   const topN = niches.filter(n => n.sap_win + n.win + n.scale).slice(0, 6);
   return `<div class="cards">${cards}</div>
     <div class="cards">
       <a class="card" onclick="setView('keywords')"><div class="note">Tự quét mỗi đêm</div>
         <b>${auto.enabled ? `Bật · ${auto.hour}h` : "Đang tắt"}</b><div class="note">${auto.keywords} từ khoá · ${auto.follows} page/shop<br>Lần gần nhất: ${auto.last_date || "chưa"}</div></a>
+      <a class="card" onclick="setView('viral')"><div class="note">Video viral TikTok / Reels</div>
+        <div><b class="red">${vir.counts.dang_no || 0}</b> đang nổ · <b>${vir.counts.viral || 0}</b> viral</div>
+        <div class="note">${vir.counts.dang_len || 0} đang lên · ${vir.counts.top_ads || 0} Top Ads</div></a>
       <a class="card" style="grid-column:span 2" onclick="setView('niches')"><div class="note">Niche POD đang nóng</div>
         ${topN.length ? topN.map(n => `<div>🎯 ${esc(n.niche)} <span class="note">· ${n.sap_win} sắp win · ${n.win} win</span></div>`).join("") : '<div class="note">Chưa đủ dữ liệu</div>'}</a>
     </div>
@@ -204,19 +325,20 @@ async function renderShops() {
       <td class="num ${r.hot ? "green" : ""}">${r.hot}</td><td>${fmtDate(r.first_ts)}</td><td>${fmtDate(r.last_ts)}</td></tr>`).join("")}</table></div>`;
 }
 
-const VIEWS = {overview: renderOverview, scan: renderScan, niches: renderNiches, follows: renderFollows,
+const VIEWS = {viral: renderViral, spread: () => renderList(null, {spread: "true"}), overview: renderOverview, scan: renderScan, niches: renderNiches, follows: renderFollows,
   keywords: renderKeywords, shops: renderShops};
 
 async function render() {
   document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.view === view));
   $("#title").textContent = TITLES[view] || (LABEL[view] || [view])[0];
-  $("#search").classList.toggle("hidden", !!VIEWS[view]);
+  $("#search").classList.toggle("hidden", !!VIEWS[view] && !["viral", "spread"].includes(view));
   let html;
   try {
     html = VIEWS[view] ? await VIEWS[view]() : await renderList(view === "all" ? null : view);
   } catch (e) { html = `<div class="empty">Lỗi tải dữ liệu: ${esc(e.message)}</div>`; }
   $("#content").innerHTML = html;
-  document.querySelectorAll(".row").forEach(r => r.onclick = () => openDrawer(r.dataset.cid));
+  document.querySelectorAll(".row[data-cid]").forEach(r => r.onclick = () => openDrawer(r.dataset.cid));
+  document.querySelectorAll(".row[data-vid]").forEach(r => r.onclick = () => openSocial(r.dataset.vid));
   bindForms();
   refreshCounts();
 }
@@ -234,6 +356,10 @@ function bindForms() {
   on("#kwForm", async d => {
     await post("/api/scan", {keyword: d.keyword, country: d.country, max_ads: 300, save: true}); pollJobs(); render();
   });
+  on("#viralForm", async (d, f) => {
+    await post("/api/viral/scan", {platform: d.platform, keyword: d.keyword, country: d.country, period: +d.period, save: !!d.save});
+    f.keyword.value = ""; pollJobs(); render();
+  });
   on("#autoForm", async d => { await post("/api/autoscan", {enabled: !!d.enabled, hour: +d.hour}); render(); });
 }
 
@@ -250,7 +376,7 @@ async function removeKw(keyword) { await del(`/api/keywords/${enc(keyword)}`); r
 async function runAll() { const r = await post("/api/autoscan/run"); pollJobs(); alert(`Đã xếp ${r.queued} việc quét.`); }
 
 async function openDrawer(cid) {
-  openCid = cid;
+  openCid = cid; openVid = null;
   document.querySelectorAll(".row").forEach(r => r.classList.toggle("on", r.dataset.cid === cid));
   const v = await api(`/api/videos/${enc(cid)}`);
   const [ln, cls] = LABEL[v.label] || [v.label, ""];
@@ -301,7 +427,7 @@ async function openDrawer(cid) {
   $("#drawer").classList.remove("hidden");
 }
 
-function closeDrawer() { openCid = null; $("#drawer").classList.add("hidden");
+function closeDrawer() { openCid = openVid = null; $("#drawer").classList.add("hidden");
   document.querySelectorAll(".row.on").forEach(r => r.classList.remove("on")); }
 async function dig(cid) { await post(`/api/videos/${enc(cid)}/dig`); pollJobs(); }
 
@@ -318,13 +444,13 @@ async function pollJobs() {
       : (s.log.length ? s.log[s.log.length - 1].msg : "Chưa chạy việc nào");
     $("#stopBtn").classList.toggle("hidden", !busy);
     $("#log").textContent = s.log.map(l => new Date(l.ts * 1000).toLocaleTimeString() + "  " + l.msg).join("\n");
-    if (wasBusy && !busy) { render(); if (openCid) openDrawer(openCid); }
+    if (wasBusy && !busy) { render(); if (openCid) openDrawer(openCid); if (openVid) openSocial(openVid); }
     wasBusy = busy;
     pollTimer = setTimeout(pollJobs, busy ? 2000 : 8000);
   } catch { pollTimer = setTimeout(pollJobs, 8000); }
 }
 
-const ACTIONS = {showScope, toggleFollow, unfollow, scanFollow, scanKw, removeKw, dig, openDrawer,
+const ACTIONS = {openSocial, removeViralKw, viralFilter: (k, val) => { viralFilters[k] = val; render(); }, showScope, toggleFollow, unfollow, scanFollow, scanKw, removeKw, dig, openDrawer,
   niche: (n, pod) => { filters.niche = n; if (pod) filters.pod = true; closeDrawer(); setView("all"); },
   fillKw: k => { $("#scanForm [name=keyword]").value = k; }};
 document.addEventListener("click", e => {

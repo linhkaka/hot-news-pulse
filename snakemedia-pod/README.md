@@ -37,6 +37,26 @@ Các nhãn (ngưỡng sửa được trong `snakepod/config.py`):
   Đổi giờ hoặc tắt trong mục "Tự quét mỗi đêm". **Tool phải đang mở** lúc đó: khi cài, tick
   "Tự mở SNAKEMEDIA POD khi bật máy", và đặt máy không tự ngủ.
 
+## Chế độ Video viral
+
+Mục **Viral** trên menu:
+
+- **Video viral**: quét theo từ khoá hoặc `#hashtag` trên 3 nguồn:
+  - **TikTok (tự nhiên)**: lượt xem, thích, bình luận, chia sẻ, ngày đăng. Cần đăng nhập TikTok 1 lần.
+  - **TikTok Top Ads**: quảng cáo hiệu quả nhất trong TikTok Creative Center (lượt thích, CTR, mức ngân sách,
+    ngành). Từ khoá có thể bỏ trống để lấy Top Ads chung; chọn khoảng 7/30/180 ngày.
+  - **Facebook Reels** (thử nghiệm): video tìm được trên Facebook theo từ khoá. Cấu trúc dữ liệu của Facebook
+    hay đổi nên phần này dễ hỏng nhất.
+- Nhãn (ngưỡng trong `snakepod/config.py`):
+  - **Đang nổ**: ≥ 20.000 lượt xem/giờ và video ≤ 3 ngày tuổi.
+  - **Viral**: ≥ 1 triệu lượt xem và video ≤ 14 ngày tuổi.
+  - **Đang lên**: ≥ 2.000 lượt xem/giờ và video ≤ 7 ngày tuổi.
+  - Lượt xem/giờ lấy **tốc độ thật giữa 2 lần quét gần nhất** (từ lần quét thứ 2), nếu chưa có thì lấy trung
+    bình từ lúc đăng. Tick "Tự quét mỗi đêm" để tool tự cập nhật số liệu mỗi đêm.
+- **QC đang lan nhanh**: video QC Facebook có ≥ 5 QC mới hoặc ≥ 2 shop mới chép trong 48 giờ qua.
+
+Đăng nhập TikTok: menu Start → **Đăng nhập TikTok** (hoặc `DangNhapTikTok.bat` khi chạy từ mã nguồn).
+
 ## Cách 1 (dễ nhất): file cài đặt SnakemediaPOD-Setup.exe
 
 1. Tải **`SnakemediaPOD-Setup.exe`** (trong mục **Releases** của repo, hoặc mục **Actions → SNAKEMEDIA POD installer → Artifacts**).
@@ -90,6 +110,8 @@ proxy dân cư (residential) ở đúng quốc gia đang quét. Khi đổi proxy
   hoặc mốc thời gian trong ảnh. Chưa kiểm chứng trên trang Shoplazza thật.
 - Nhận diện POD/niche dựa trên từ khoá tiếng Anh, có thể sót hoặc nhầm; sửa bảng từ khoá trong `snakepod/pod.py`.
 - Tự quét chỉ chạy khi tool đang mở. Chưa có: tìm nguồn fulfill.
+- Phần TikTok, Top Ads và Facebook Reels mới chỉ được thử trên trang giả dựng trên máy (môi trường phát triển bị
+  chặn các trang này). TikTok chặn máy tự động khá gắt: nên đăng nhập, quét chậm, dùng proxy dân cư nếu bị chặn.
 - Link video của Facebook hết hạn sau vài ngày; khi đó nút "Xem video" mở Thư viện QC thay thế.
 
 ## Lưu ý pháp lý
@@ -113,6 +135,7 @@ python -m snakepod          # chạy server
 | `snakepod/imagehash.py` | dHash thumbnail để nhận ra video trùng |
 | `snakepod/landing.py` | Đọc tuổi trang bán (Shopify, UUID, ảnh sản phẩm) |
 | `snakepod/pod.py` | Nhận diện loại sản phẩm POD, niche, cá nhân hoá |
+| `snakepod/social.py` | Đọc video TikTok / Top Ads / Reels và chấm nhãn viral |
 | `snakepod/analyze.py` | Gom QC thành video, tính chỉ số, dán nhãn |
 | `snakepod/jobs.py` | Hàng đợi việc chạy nền, nhật ký, lịch tự quét mỗi đêm |
 | `snakepod/demo.py` | Tạo dữ liệu giả để xem giao diện |

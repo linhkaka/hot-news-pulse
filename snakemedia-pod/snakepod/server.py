@@ -7,7 +7,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, jobs
+from . import config, db, jobs, social
 
 STATIC = Path(__file__).parent / "static"
 LABELS = {"sap_win": "Sắp WIN", "win": "Video Win", "scale": "Video scale", "theo_doi": "Chờ thêm dữ liệu",
@@ -39,6 +39,15 @@ class FollowIn(BaseModel):
     name: str | None = None
 
 
+class SocialScanIn(BaseModel):
+    platform: str               # tiktok | tiktok_ads | fb_reels
+    keyword: str = ""
+    country: str = config.DEFAULT_COUNTRY
+    max_items: int = 200
+    period: int = 7             # Top Ads: 7 / 30 / 180 ngày
+    save: bool = False
+
+
 class AutoIn(BaseModel):
     enabled: bool
     hour: int
@@ -67,8 +76,12 @@ def _facets(items):
 
 @app.get("/api/videos")
 def videos(label: str | None = None, q: str | None = None, product_type: str | None = None,
-           niche: str | None = None, pod: bool = False, page_id: str | None = None, shop: str | None = None):
+           niche: str | None = None, pod: bool = False, page_id: str | None = None, shop: str | None = None,
+           spread: bool = False):
     items = db.list_videos(label)
+    if spread:   # QC Facebook đang lan nhanh: xếp theo số QC mới 48h
+        items = sorted((v for v in items if v.get("spreading")),
+                       key=lambda v: (v.get("ads_new_48h", 0), v.get("shops_new_48h", 0)), reverse=True)
     if q:
         ql = q.lower()
         items = [v for v in items if ql in (v["title"] or "").lower() or any(ql in s for s in v["shops"])
@@ -87,6 +100,80 @@ def videos(label: str | None = None, q: str | None = None, product_type: str | N
     for v in items:
         v.pop("ads", None)
     return {"items": items[:500], "total": len(items), "facets": facets}
+
+
+# ---- video viral: TikTok / TikTok Top Ads / Facebook Reels ----
+
+def _social_list(platform=None):
+    rows = db.social_rows(platform)
+    snaps = db.social_snapshots({r["vid"] for r in rows})
+    return [social.summarize(r, snaps.get(r["vid"], [])) for r in rows]
+
+
+SOCIAL_SORTS = {"vph": lambda v: v["sort_vph"], "views": lambda v: v.get("views") or 0,
+                "likes": lambda v: v.get("likes") or 0, "engagement": lambda v: v.get("engagement") or 0,
+                "new": lambda v: v.get("created_ts") or v.get("first_seen") or 0}
+
+
+@app.get("/api/viral")
+def viral(platform: str | None = None, label: str | None = None, q: str | None = None,
+          product_type: str | None = None, niche: str | None = None, pod: bool = False, sort: str = "vph"):
+    items = _social_list(platform)
+    counts = {k: 0 for k in social.LABELS}
+    for v in items:
+        counts[v["label"]] += 1
+    if label:
+        items = [v for v in items if v["label"] == label]
+    if q:
+        ql = q.lower()
+        items = [v for v in items if ql in (v.get("caption") or "").lower() or ql in (v.get("author") or "").lower()
+                 or ql in (v.get("keyword") or "").lower()]
+    if pod:
+        items = [v for v in items if v["is_pod"]]
+    facets = _facets(items)
+    if product_type:
+        items = [v for v in items if v["product_type"] == product_type]
+    if niche:
+        items = [v for v in items if niche in v["niches"]]
+    items.sort(key=SOCIAL_SORTS.get(sort, SOCIAL_SORTS["vph"]), reverse=True)
+    for v in items:
+        v.pop("snapshots", None)
+    return {"items": items[:500], "total": len(items), "facets": facets, "counts": counts,
+            "labels": social.LABELS, "platforms": social.PLATFORMS}
+
+
+@app.get("/api/viral/keywords")
+def viral_keywords():
+    return db.list_social_watch()
+
+
+@app.delete("/api/viral/keywords/{platform}/{keyword}")
+def delete_viral_keyword(platform: str, keyword: str):
+    db.remove_social_watch(platform, keyword.strip())   # Top Ads không từ khoá được gửi là " "
+    return {"ok": True}
+
+
+@app.post("/api/viral/scan")
+def viral_scan(body: SocialScanIn):
+    if body.platform not in social.PLATFORMS:
+        raise HTTPException(400, "Nền tảng không hợp lệ")
+    kw = body.keyword.strip()
+    if not kw and body.platform != "tiktok_ads":
+        raise HTTPException(400, "Thiếu từ khoá")
+    country = body.country.upper()
+    if body.save:
+        db.add_social_watch(body.platform, kw, country)
+    jobs.submit("social", f"Viral {body.platform} '{kw}'",
+                jobs.social_job(body.platform, kw, country, max(10, min(body.max_items, 1000)), body.period))
+    return {"ok": True}
+
+
+@app.get("/api/viral/{vid:path}")
+def viral_detail(vid: str):
+    r = db.social_row(vid)
+    if not r:
+        raise HTTPException(404)
+    return social.summarize(r, db.social_snapshots({vid}).get(vid, []))
 
 
 @app.get("/api/niches")

@@ -34,6 +34,7 @@ Source: "..\dist\SnakemediaPOD\*"; DestDir: "{app}"; Flags: ignoreversion recurs
 [Icons]
 Name: "{autoprograms}\SNAKEMEDIA POD\SNAKEMEDIA POD"; Filename: "{app}\SnakemediaPOD.exe"
 Name: "{autoprograms}\SNAKEMEDIA POD\Đăng nhập Facebook"; Filename: "{app}\SnakemediaPOD.exe"; Parameters: "--login"
+Name: "{autoprograms}\SNAKEMEDIA POD\Đăng nhập TikTok"; Filename: "{app}\SnakemediaPOD.exe"; Parameters: "--login tiktok"
 Name: "{autoprograms}\SNAKEMEDIA POD\Xem demo (dữ liệu giả)"; Filename: "{app}\SnakemediaPOD.exe"; Parameters: "--demo"
 Name: "{autoprograms}\SNAKEMEDIA POD\Thư mục dữ liệu và proxy"; Filename: "{app}\SnakemediaPOD.exe"; Parameters: "--data"
 Name: "{autoprograms}\SNAKEMEDIA POD\Gỡ cài đặt SNAKEMEDIA POD"; Filename: "{uninstallexe}"

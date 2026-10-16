@@ -5,11 +5,13 @@ bằng "DangNhapFacebook.bat".
 """
 import os
 import random
-from urllib.parse import unquote, urlencode, urlparse
+import re
+from urllib.parse import quote, unquote, urlencode, urlparse
 
 from playwright.sync_api import sync_playwright
 
 from . import config
+from . import social
 from .fb_parser import parse_html, parse_json_text
 
 BASE = "https://www.facebook.com/ads/library/"
@@ -68,12 +70,18 @@ def open_browser(p, headless=None):
     )
 
 
-def collect(ctx, url, max_ads, log, stop=lambda: False):
-    """Mở 1 URL thư viện QC, cuộn tới khi đủ max_ads hoặc hết kết quả."""
+def collect(ctx, url, max_ads, log, stop=lambda: False, *, match=lambda u: "/api/graphql" in u,
+            marker="ad_archive_id", parse_text=parse_json_text, parse_page=parse_html, key="ad_id",
+            noun="QC", login_hint="Facebook bắt đăng nhập — chạy DangNhapFacebook.bat trước.", click_more=None,
+            prepare=None):
+    """Mở 1 trang, cuộn tới khi đủ max_ads hoặc hết kết quả, đọc dữ liệu từ các phản hồi JSON của trang.
+
+    Mặc định cho Thư viện QC Facebook; TikTok / Facebook Reels truyền bộ lọc và bộ đọc riêng.
+    """
     page = ctx.new_page()
     responses = []
-    page.on("response", lambda r: responses.append(r) if "/api/graphql" in r.url else None)
-    ads = {}
+    page.on("response", lambda r: responses.append(r) if match(r.url) else None)
+    items = {}
 
     def drain():
         while responses:
@@ -82,39 +90,54 @@ def collect(ctx, url, max_ads, log, stop=lambda: False):
                 text = r.text()
             except Exception:
                 continue
-            if "ad_archive_id" in text:
-                for ad in parse_json_text(text):
-                    ads[ad["ad_id"]] = ad
+            if any(m in text for m in ((marker,) if isinstance(marker, str) else marker)):
+                for it in parse_text(text):
+                    items[it[key]] = it
 
     try:
         page.goto(url, wait_until="domcontentloaded", timeout=60000)
         page.wait_for_timeout(4000)
-        for ad in parse_html(page.content()):
-            ads[ad["ad_id"]] = ad
+        if prepare:
+            prepare(page, log)
+            page.wait_for_timeout(3000)
+        for it in parse_page(page.content()):
+            items[it[key]] = it
+        drain()
         if "login" in page.url:
-            log("Facebook bắt đăng nhập — chạy DangNhapFacebook.bat trước.")
+            log(login_hint)
         stale = 0
-        while len(ads) < max_ads and stale < 5 and not stop():
-            before = len(ads)
+        while len(items) < max_ads and stale < 5 and not stop():
+            before = len(items)
+            if click_more:
+                try:
+                    btn = page.locator(click_more).first
+                    if btn.is_visible():
+                        btn.click()
+                except Exception:
+                    pass
             page.mouse.wheel(0, 5000)
             page.wait_for_timeout(1500 + random.randint(0, 1200))
             drain()
-            stale = stale + 1 if len(ads) == before else 0
-            if len(ads) != before:
-                log(f"  ... đã đọc {len(ads)} QC")
+            stale = stale + 1 if len(items) == before else 0
+            if len(items) != before:
+                log(f"  ... đã đọc {len(items)} {noun}")
         drain()
     finally:
         page.close()
-    return list(ads.values())[:max_ads]
+    return list(items.values())[:max_ads]
 
 
-def scan_keyword(keyword, country, max_ads, log, stop=lambda: False):
+def run_collect(url, max_items, log, stop=lambda: False, **kw):
     with sync_playwright() as p:
         ctx = open_browser(p)
         try:
-            return collect(ctx, keyword_url(keyword, country), max_ads, log, stop)
+            return collect(ctx, url, max_items, log, stop, **kw)
         finally:
             ctx.close()
+
+
+def scan_keyword(keyword, country, max_ads, log, stop=lambda: False):
+    return run_collect(keyword_url(keyword, country), max_ads, log, stop)
 
 
 def scan_pages(page_ids, country, max_ads, log, stop=lambda: False):
@@ -130,3 +153,63 @@ def scan_pages(page_ids, country, max_ads, log, stop=lambda: False):
         finally:
             ctx.close()
     return out
+
+
+# ---------------- Video viral: TikTok + Facebook Reels ----------------
+
+TIKTOK = "https://www.tiktok.com"
+CREATIVE_CENTER = "https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/en"
+FB = "https://www.facebook.com"
+
+
+def tiktok_url(keyword):
+    """'#dogmom' -> trang hashtag; còn lại -> tìm kiếm video."""
+    kw = keyword.strip()
+    if kw.startswith("#"):
+        return f"{TIKTOK}/tag/{quote(kw[1:])}"
+    return f"{TIKTOK}/search/video?" + urlencode({"q": kw})
+
+
+def topads_url(country, period):
+    return CREATIVE_CENTER + "?" + urlencode({"period": period, "region": country})
+
+
+def reels_url(keyword):
+    return f"{FB}/search/videos/?" + urlencode({"q": keyword})
+
+
+def _type_search(keyword):
+    """Creative Center: gõ từ khoá vào ô tìm kiếm (nếu có) rồi Enter."""
+    def prepare(page, log):
+        if not keyword:
+            return
+        try:
+            box = page.get_by_placeholder(re.compile("search", re.I)).first
+            box.fill(keyword)
+            box.press("Enter")
+            log(f"Tìm '{keyword}' trong Top Ads")
+        except Exception as e:
+            log(f"Không gõ được từ khoá vào Top Ads ({e}); lấy Top Ads chung")
+    return prepare
+
+
+def scan_social(platform, keyword, country, max_items, period, log, stop=lambda: False):
+    if platform == "tiktok":
+        return run_collect(
+            tiktok_url(keyword), max_items, log, stop,
+            match=lambda u: any(k in u for k in ("/api/search/", "/api/challenge/item_list", "/api/post/item_list")),
+            marker="playCount", parse_text=social.parse_tiktok_text, parse_page=social.parse_tiktok_html,
+            key="vid", noun="video", login_hint="TikTok bắt đăng nhập — chạy 'Đăng nhập TikTok' trước.")
+    if platform == "tiktok_ads":
+        return run_collect(
+            topads_url(country, period), max_items, log, stop,
+            match=lambda u: "creative_radar_api" in u, marker="ad_title",
+            parse_text=social.parse_topads_text, parse_page=lambda html: [], key="vid", noun="Top Ads",
+            login_hint="Creative Center bắt đăng nhập — chạy 'Đăng nhập TikTok' trước.",
+            click_more="text=/View More|Xem thêm/i", prepare=_type_search(keyword))
+    if platform == "fb_reels":
+        return run_collect(
+            reels_url(keyword), max_items, log, stop,
+            marker=("play_count", "video_view_count"), parse_text=social.parse_reels_text,
+            parse_page=social.parse_reels_html, key="vid", noun="video")
+    raise ValueError(f"Nền tảng không hỗ trợ: {platform}")

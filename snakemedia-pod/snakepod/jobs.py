@@ -144,6 +144,45 @@ def follow_job(kind, key, country):
     return run
 
 
+def fetch_social_covers():
+    todo = db.social_missing_covers()
+    if not todo:
+        return
+    log(f"Tải {len(todo)} ảnh bìa video")
+    config.THUMB_DIR.mkdir(parents=True, exist_ok=True)
+    headers = {"User-Agent": landing.UA}
+    with httpx.Client(timeout=20, follow_redirects=True, headers=headers) as c:
+        for v in todo:
+            if should_stop():
+                return
+            ref = {"tiktok": "https://www.tiktok.com/", "tiktok_ads": "https://ads.tiktok.com/",
+                   "fb_reels": "https://www.facebook.com/"}.get(v["platform"])
+            try:
+                r = c.get(v["cover_url"], headers={"Referer": ref} if ref else None)
+                r.raise_for_status()
+                name = "s_" + "".join(ch if ch.isalnum() else "_" for ch in v["vid"]) + ".jpg"
+                (config.THUMB_DIR / name).write_bytes(r.content)
+                db.set_social_cover(v["vid"], name)
+            except Exception as e:
+                log(f"  bỏ qua ảnh bìa {v['vid']}: {e}")
+
+
+def social_job(platform, keyword, country, max_items, period=7):
+    """Quét video viral 1 nền tảng theo từ khoá (Top Ads: từ khoá có thể bỏ trống)."""
+    from . import scraper, social
+
+    def run():
+        name = social.PLATFORMS[platform]
+        log(f"Quét {name} '{keyword or 'tất cả'}' ({country})")
+        items = scraper.scan_social(platform, keyword, country, max_items, period, log, should_stop)
+        log(f"Đọc được {len(items)} video {name}")
+        db.upsert_social(items, keyword or None)
+        db.touch_social_watch(platform, keyword)
+        fetch_social_covers()
+        return len(items)
+    return run
+
+
 def queue_all_watched(reason):
     """Xếp hàng quét lại mọi từ khoá đã lưu và mọi page/shop đang theo dõi."""
     country = config.DEFAULT_COUNTRY
@@ -153,6 +192,9 @@ def queue_all_watched(reason):
                     keyword_job(w["keyword"], w["country"] or country, config.DEFAULT_MAX_ADS))
     for f in db.list_follows():
         n += submit("follow", f"Theo dõi {f['kind']} {f['name'] or f['key']}", follow_job(f["kind"], f["key"], country))
+    for w in db.list_social_watch():
+        n += submit("social", f"Viral {w['platform']} '{w['keyword']}'",
+                    social_job(w["platform"], w["keyword"], w["country"] or country, config.DEFAULT_MAX_ADS))
     log(f"{reason}: xếp {n} việc quét")
     return n
 

@@ -2,6 +2,7 @@
 
   SnakemediaPOD.exe            chạy tool và mở trình duyệt
   SnakemediaPOD.exe --login    mở Chromium để đăng nhập Facebook
+  SnakemediaPOD.exe --login tiktok   mở Chromium để đăng nhập TikTok
   SnakemediaPOD.exe --demo     chạy với dữ liệu giả (lưu riêng, không đụng dữ liệu thật)
   SnakemediaPOD.exe --data     mở thư mục dữ liệu (chứa proxy.txt)
   SnakemediaPOD.exe --selftest kiểm tra Chromium đi kèm có chạy được không
@@ -71,7 +72,7 @@ def main(argv=None):
         return selftest()
     if "--login" in args:
         from . import login
-        login.main()
+        login.main("tiktok" if "tiktok" in args else "facebook")
         return
     if "--demo" in args:
         from . import demo

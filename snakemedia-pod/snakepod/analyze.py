@@ -90,6 +90,17 @@ def summarize(cid, ads, landings, now=None):
                  if d != "?" and any(config.SCALE_MAX_DAYS <= r <= config.WIN_MAX_DAYS for r in runs)}
     shops_new_post = {d for d, runs in shop_run.items() if d != "?" and min(runs) < config.NEW_POST_DAYS}
     ads_total = sum(_w(a) for a in ads)
+
+    # Độ lan: QC / shop / page MỚI chép video trong SPREAD_HOURS giờ qua
+    recent_cut = now - config.SPREAD_HOURS * 3600
+    fresh = [a for a in ads if a.get("start_ts") and a["start_ts"] >= recent_cut]
+    first_by_shop = {}
+    for a in ads:
+        if a.get("domain") and a.get("start_ts"):
+            first_by_shop[a["domain"]] = min(first_by_shop.get(a["domain"], a["start_ts"]), a["start_ts"])
+    shops_new = sum(1 for t in first_by_shop.values() if t >= recent_cut)
+    ads_new = sum(_w(a) for a in fresh)
+    spreading = ads_new >= config.SPREAD_MIN_NEW_ADS or shops_new >= config.SPREAD_MIN_NEW_SHOPS
     ads_per_day = ads_total / max(1.0, video_age or 1.0)
 
     # Trang bán chính = link có nhiều QC nhất; tuổi trang = trang SỚM nhất trong các trang đã đọc được
@@ -151,6 +162,11 @@ def summarize(cid, ads, landings, now=None):
         "ads_active": sum(_w(a) for a in active),
         "ads_gone": sum(_w(a) for a in inactive),
         "ads_per_day": round(ads_per_day, 2),
+        "ads_new_24h": sum(_w(a) for a in fresh if a["start_ts"] >= now - 86400),
+        "ads_new_48h": ads_new,
+        "shops_new_48h": shops_new,
+        "pages_new_48h": len({a["page_id"] for a in fresh if a.get("page_id")}),
+        "spreading": spreading,
         "buckets": buckets,
         "page_ids": sorted(pages_all),
         "shops": sorted(shops_all),

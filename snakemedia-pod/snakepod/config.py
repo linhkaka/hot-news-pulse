@@ -41,3 +41,16 @@ MIN_SHOPS_SAP_WIN = 2          # ít nhất 2 shop (domain) khác nhau đang ch�
 MIN_SHOPS_WIN = 2              # ít nhất 2 shop giữ QC sống 7-14 ngày
 MIN_SCALE_ADS = 5              # 1 shop bơm >= 5 QC mới trong 7 ngày -> "Video scale"
 NEW_POST_DAYS = 3              # shop có QC bắt đầu trong 3 ngày -> "đang lên bài mới"
+
+# QC Facebook "đang lan nhanh": nhiều QC / shop mới chép video trong 48 giờ qua
+SPREAD_HOURS = 48
+SPREAD_MIN_NEW_ADS = 5
+SPREAD_MIN_NEW_SHOPS = 2
+
+# Video viral (TikTok / Facebook Reels). vph = lượt xem mỗi giờ
+VIRAL_EXPLODE_VPH = 20_000     # "Đang nổ": >= 20.000 lượt xem/giờ ...
+VIRAL_EXPLODE_MAX_DAYS = 3     # ... và video <= 3 ngày tuổi
+VIRAL_MIN_VIEWS = 1_000_000    # "Viral": >= 1 triệu lượt xem ...
+VIRAL_MAX_DAYS = 14            # ... và video <= 14 ngày tuổi
+VIRAL_RISING_VPH = 2_000       # "Đang lên": >= 2.000 lượt xem/giờ ...
+VIRAL_RISING_MAX_DAYS = 7      # ... và video <= 7 ngày tuổi

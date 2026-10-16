@@ -68,6 +68,45 @@ CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+CREATE TABLE IF NOT EXISTS social_videos (
+    vid TEXT PRIMARY KEY,          -- '<nền tảng>:<id>'
+    platform TEXT,                 -- tiktok | tiktok_ads | fb_reels
+    item_id TEXT,
+    url TEXT,
+    author TEXT,
+    caption TEXT,
+    cover_url TEXT,
+    cover_path TEXT,
+    video_url TEXT,
+    views INTEGER,
+    likes INTEGER,
+    comments INTEGER,
+    shares INTEGER,
+    saves INTEGER,
+    created_ts INTEGER,
+    duration INTEGER,
+    extra TEXT,
+    keyword TEXT,
+    first_seen INTEGER,
+    last_seen INTEGER
+);
+CREATE TABLE IF NOT EXISTS social_snapshots (
+    vid TEXT,
+    ts INTEGER,
+    views INTEGER,
+    likes INTEGER,
+    comments INTEGER,
+    shares INTEGER
+);
+CREATE INDEX IF NOT EXISTS social_snap_vid ON social_snapshots(vid, ts);
+CREATE TABLE IF NOT EXISTS social_watch (
+    platform TEXT,
+    keyword TEXT,
+    country TEXT,
+    added_ts INTEGER,
+    last_scan_ts INTEGER,
+    PRIMARY KEY (platform, keyword)
+);
 CREATE TABLE IF NOT EXISTS scans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT,
@@ -285,3 +324,91 @@ def shop_rows():
                       MAX(l.platform) AS platform, MAX(l.pod_markers) AS pod_markers
                FROM ads a LEFT JOIN landings l ON l.url = a.link_url
                WHERE a.domain IS NOT NULL GROUP BY a.domain ORDER BY active DESC, ads DESC""")]
+
+
+# ---- video viral (TikTok / Facebook Reels) ----
+
+def upsert_social(items, keyword=None, now=None):
+    """Lưu video + 1 bản chụp số liệu (để tính tốc độ tăng thật giữa các lần quét)."""
+    now = now or int(time.time())
+    with _lock, connect() as conn:
+        for it in items:
+            conn.execute(
+                """INSERT INTO social_videos (vid, platform, item_id, url, author, caption, cover_url, video_url,
+                       views, likes, comments, shares, saves, created_ts, duration, extra, keyword, first_seen, last_seen)
+                   VALUES (:vid, :platform, :item_id, :url, :author, :caption, :cover_url, :video_url,
+                       :views, :likes, :comments, :shares, :saves, :created_ts, :duration, :extra, :keyword, :now, :now)
+                   ON CONFLICT(vid) DO UPDATE SET
+                       url=COALESCE(excluded.url, social_videos.url),
+                       caption=COALESCE(excluded.caption, social_videos.caption),
+                       cover_url=COALESCE(excluded.cover_url, social_videos.cover_url),
+                       video_url=COALESCE(excluded.video_url, social_videos.video_url),
+                       views=COALESCE(excluded.views, social_videos.views),
+                       likes=COALESCE(excluded.likes, social_videos.likes),
+                       comments=COALESCE(excluded.comments, social_videos.comments),
+                       shares=COALESCE(excluded.shares, social_videos.shares),
+                       saves=COALESCE(excluded.saves, social_videos.saves),
+                       created_ts=COALESCE(social_videos.created_ts, excluded.created_ts),
+                       extra=COALESCE(excluded.extra, social_videos.extra),
+                       keyword=COALESCE(social_videos.keyword, excluded.keyword),
+                       last_seen=excluded.last_seen""",
+                {**it, "keyword": keyword, "now": now})
+            conn.execute("INSERT INTO social_snapshots (vid, ts, views, likes, comments, shares) VALUES (?, ?, ?, ?, ?, ?)",
+                         (it["vid"], now, it.get("views"), it.get("likes"), it.get("comments"), it.get("shares")))
+
+
+def social_rows(platform=None):
+    with connect() as conn:
+        if platform:
+            return [dict(r) for r in conn.execute("SELECT * FROM social_videos WHERE platform=?", (platform,))]
+        return [dict(r) for r in conn.execute("SELECT * FROM social_videos")]
+
+
+def social_row(vid):
+    with connect() as conn:
+        r = conn.execute("SELECT * FROM social_videos WHERE vid=?", (vid,)).fetchone()
+        return dict(r) if r else None
+
+
+def social_snapshots(vids=None):
+    """{vid: [(ts, views, likes, comments, shares), ...]} theo thời gian tăng dần."""
+    out = {}
+    with connect() as conn:
+        rows = conn.execute("SELECT vid, ts, views, likes, comments, shares FROM social_snapshots ORDER BY ts")
+        for r in rows:
+            if vids is None or r[0] in vids:
+                out.setdefault(r[0], []).append(tuple(r[1:]))
+    return out
+
+
+def social_missing_covers():
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(
+            "SELECT vid, platform, cover_url FROM social_videos WHERE cover_path IS NULL AND cover_url IS NOT NULL")]
+
+
+def set_social_cover(vid, path):
+    with _lock, connect() as conn:
+        conn.execute("UPDATE social_videos SET cover_path=? WHERE vid=?", (path, vid))
+
+
+def add_social_watch(platform, keyword, country):
+    with _lock, connect() as conn:
+        conn.execute("INSERT OR IGNORE INTO social_watch (platform, keyword, country, added_ts) VALUES (?, ?, ?, ?)",
+                     (platform, keyword, country, int(time.time())))
+
+
+def remove_social_watch(platform, keyword):
+    with _lock, connect() as conn:
+        conn.execute("DELETE FROM social_watch WHERE platform=? AND keyword=?", (platform, keyword))
+
+
+def list_social_watch():
+    with connect() as conn:
+        return [dict(r) for r in conn.execute("SELECT * FROM social_watch ORDER BY platform, keyword")]
+
+
+def touch_social_watch(platform, keyword):
+    with _lock, connect() as conn:
+        conn.execute("UPDATE social_watch SET last_scan_ts=? WHERE platform=? AND keyword=?",
+                     (int(time.time()), platform, keyword))
