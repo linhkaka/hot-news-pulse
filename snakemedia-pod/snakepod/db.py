@@ -112,6 +112,12 @@ CREATE TABLE IF NOT EXISTS rate_events (
     ts INTEGER
 );
 CREATE INDEX IF NOT EXISTS rate_events_p ON rate_events(platform, ts);
+CREATE TABLE IF NOT EXISTS notified (
+    kind TEXT,
+    key TEXT,
+    ts INTEGER,
+    PRIMARY KEY (kind, key)
+);
 CREATE TABLE IF NOT EXISTS scans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT,
@@ -434,3 +440,29 @@ def count_rate_events(platform, since):
 def last_rate_event(platform):
     with connect() as conn:
         return conn.execute("SELECT MAX(ts) FROM rate_events WHERE platform=?", (platform,)).fetchone()[0]
+
+
+# ---- thông báo: nhớ cái đã báo ----
+
+def unseen_notified(kind, keys):
+    if not keys:
+        return []
+    with connect() as conn:
+        seen = set()
+        for i in range(0, len(keys), 500):
+            chunk = keys[i:i + 500]
+            q = "SELECT key FROM notified WHERE kind=? AND key IN (%s)" % ",".join("?" * len(chunk))
+            seen |= {r[0] for r in conn.execute(q, [kind, *chunk])}
+    return [k for k in keys if k not in seen]
+
+
+def mark_notified(kind, keys):
+    now = int(time.time())
+    with _lock, connect() as conn:
+        conn.executemany("INSERT OR IGNORE INTO notified (kind, key, ts) VALUES (?, ?, ?)", [(kind, k, now) for k in keys])
+
+
+def ads_first_seen_since(column, value, since):
+    assert column in ("page_id", "domain")
+    with connect() as conn:
+        return conn.execute(f"SELECT COUNT(*) FROM ads WHERE {column}=? AND first_seen>=?", (value, since)).fetchone()[0]

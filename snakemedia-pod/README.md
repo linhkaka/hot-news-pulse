@@ -10,7 +10,7 @@ Sản phẩm win = **video còn mới** + **trang bán mới** + **nhiều shop 
 
 | Tool đo gì | Cách đo |
 |---|---|
-| Tuổi thật của video | Gom mọi QC dùng chung 1 video (trên mọi page/shop, **kể cả QC đã tắt**) bằng dấu vân tay ảnh thumbnail. Tuổi = ngày QC **sớm nhất**. Đổi caption, đổi page, lên bài mới đều không giấu được. |
+| Tuổi thật của video | Gom mọi QC dùng chung 1 video (trên mọi page/shop, **kể cả QC đã tắt**) bằng dấu vân tay ảnh thumbnail; ảnh hơi khác (video bị cắt, thêm chữ) vẫn gom nếu QC cùng nội dung chữ hoặc cùng sản phẩm. Tuổi = ngày QC **sớm nhất**. Đổi caption, đổi page, lên bài mới đều không giấu được. |
 | Tuổi trang bán | Shopify: `created_at` qua `/products/<handle>.json`. Nền tảng khác (Shoplazza, Shopline, WooCommerce…): ngày tạo trong dữ liệu sản phẩm nhúng ở trang → mã sản phẩm UUID v1 → mốc thời gian trong link ảnh. Hai cách sau là **ước tính** (dấu `*`). Trang tạo trước video > 14 ngày → tô **đỏ**. |
 | Bao nhiêu shop đổ tiền | Đếm số domain/page đang chạy, và số shop **giữ QC sống 7–14 ngày** (đã tiêu tiền mà vẫn giữ = có lời). |
 | QC/ngày | Tổng số QC ÷ số ngày từ QC đầu tiên. |
@@ -68,6 +68,20 @@ vòng tài khoản). Nó giảm nguy cơ bị checkpoint bằng cách cư xử n
 - **Gặp checkpoint, captcha hoặc trang bắt đăng nhập lại → dừng ngay** và tạm dừng mọi lượt quét của nền tảng đó
   (kể cả lượt tự quét ban đêm). Màn hình hiện băng cảnh báo đỏ: bấm **Mở trình duyệt để xác minh**, tự làm theo
   hướng dẫn của Facebook/TikTok, đóng cửa sổ, đợi vài tiếng rồi bấm **Đã xử lý, quét tiếp**.
+
+## Thông báo (Telegram / Windows)
+
+Mục **🔔 Thông báo**: tool báo khi có video Sắp WIN / Win mới, video TikTok/Reels Đang nổ / Viral mới, hoặc
+page/shop đang theo dõi lên QC mới. Mỗi video chỉ báo 1 lần; video có từ trước khi bật sẽ không bị báo.
+
+Cài Telegram: mở **@BotFather** → `/newbot` → nhận token → dán vào tool → nhắn `/start` cho bot →
+bấm **Tự lấy chat ID** → **Gửi thử**. Thông báo Windows bật sẵn (Windows 10/11, không cần cài thêm).
+
+## Gói chẩn đoán
+
+Khi 1 lượt quét ra 0 kết quả, lỗi hoặc gặp checkpoint, tool tự lưu **gói chẩn đoán** (mã trang, dữ liệu thô,
+ảnh chụp màn hình; email đã được che). Vào **🛡 Chế độ an toàn → Gói chẩn đoán**, bấm **Tải .zip** và gửi
+cho người hỗ trợ để sửa nhanh. Trang có thể chứa tên tài khoản của bạn, nên xem trước khi gửi.
 
 ## Đổi logo
 
@@ -154,6 +168,9 @@ python -m snakepod          # chạy server
 | `snakepod/pod.py` | Nhận diện loại sản phẩm POD, niche, cá nhân hoá |
 | `snakepod/social.py` | Đọc video TikTok / Top Ads / Reels và chấm nhãn viral |
 | `snakepod/analyze.py` | Gom QC thành video, tính chỉ số, dán nhãn |
-| `snakepod/jobs.py` | Hàng đợi việc chạy nền, nhật ký, lịch tự quét mỗi đêm |
+| `snakepod/jobs.py` | Hàng đợi việc chạy nền, nhật ký, lịch tự quét mỗi đêm, tải ảnh/đọc trang bán song song |
+| `snakepod/notify.py` | Thông báo Telegram / Windows |
+| `snakepod/diag.py` | Gói chẩn đoán khi quét lỗi |
+| `snakepod/safety.py` | Chế độ an toàn: phát hiện checkpoint, giới hạn quét |
 | `snakepod/demo.py` | Tạo dữ liệu giả để xem giao diện |
 | `snakepod/server.py`, `snakepod/static/` | API + giao diện |

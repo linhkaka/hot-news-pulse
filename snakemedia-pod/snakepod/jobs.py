@@ -3,11 +3,13 @@ import collections
 import queue
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
+from urllib.parse import urlparse
 
 import httpx
 
-from . import analyze, config, db, landing, safety
+from . import analyze, config, db, landing, notify, safety
 from .imagehash import dhash
 
 LOG = collections.deque(maxlen=300)
@@ -74,6 +76,24 @@ def should_stop():
 
 # ---- các bước xử lý sau khi có QC ----
 
+def _parallel(items, work, noun):
+    """Chạy `work(item)` cho nhiều item cùng lúc (HTTP_WORKERS luồng), báo tiến độ, dừng được giữa chừng."""
+    done = 0
+    with ThreadPoolExecutor(max_workers=config.HTTP_WORKERS) as pool:
+        futures = [pool.submit(work, it) for it in items]
+        for fut in as_completed(futures):
+            done += 1
+            if should_stop():
+                for f in futures:
+                    f.cancel()
+                return
+            err = fut.exception()
+            if err:
+                log(f"  bỏ qua 1 {noun}: {err}")
+            if done % 50 == 0:
+                log(f"  ... {done}/{len(items)} {noun}")
+
+
 def fetch_thumbs():
     todo = db.ads_missing_thumbs()
     if not todo:
@@ -81,19 +101,13 @@ def fetch_thumbs():
     log(f"Tải {len(todo)} ảnh thumbnail để nhận diện video trùng")
     config.THUMB_DIR.mkdir(parents=True, exist_ok=True)
     with httpx.Client(timeout=20, follow_redirects=True) as c:
-        for i, a in enumerate(todo):
-            if should_stop():
-                return
-            try:
-                r = c.get(a["thumb_url"])
-                r.raise_for_status()
-                path = config.THUMB_DIR / f"{a['ad_id']}.jpg"
-                path.write_bytes(r.content)
-                db.set_thumb(a["ad_id"], path.name, dhash(r.content))
-            except Exception as e:
-                log(f"  bỏ qua ảnh {a['ad_id']}: {e}")
-            if i and i % 50 == 0:
-                log(f"  ... {i}/{len(todo)} ảnh")
+        def work(a):
+            r = c.get(a["thumb_url"])
+            r.raise_for_status()
+            path = config.THUMB_DIR / f"{a['ad_id']}.jpg"
+            path.write_bytes(r.content)
+            db.set_thumb(a["ad_id"], path.name, dhash(r.content))
+        _parallel(todo, work, "ảnh")
 
 
 def check_landings():
@@ -101,17 +115,24 @@ def check_landings():
     if not urls:
         return
     log(f"Đọc tuổi {len(urls)} trang bán")
-    with httpx.Client(headers={"User-Agent": landing.UA}, follow_redirects=True, timeout=20) as c:
-        for u in urls:
-            if should_stop():
-                return
-            db.save_landing(landing.check(u, c))
+    # Mỗi shop tối đa 2 yêu cầu cùng lúc để không làm phiền / bị shop chặn
+    per_domain = collections.defaultdict(lambda: threading.Semaphore(2))
+    lock = threading.Lock()
+    with httpx.Client(headers={"User-Agent": landing.UA}, follow_redirects=True, timeout=20,
+                      limits=httpx.Limits(max_connections=config.HTTP_WORKERS * 2)) as c:
+        def work(u):
+            with lock:
+                sem = per_domain[urlparse(u).netloc]
+            with sem:
+                db.save_landing(landing.check(u, c))
+        _parallel(urls, work, "trang bán")
 
 
 def recompute():
     videos = analyze.build_videos(db.all_ads(), db.landings_by_url())
     db.replace_videos(videos)
     log(f"Đã chấm lại {len(videos)} video")
+    notify.check_videos(videos, log)
 
 
 def process_after_scan():
@@ -141,6 +162,7 @@ def follow_job(kind, key, country):
 
     def run():
         safety.before_scan("facebook", log, should_stop)
+        started = int(time.time())
         if kind == "page":
             ads = scraper.scan_pages([key], country, config.DIG_MAX_ADS_PER_PAGE, log, should_stop)
         else:
@@ -151,6 +173,11 @@ def follow_job(kind, key, country):
         db.upsert_ads(ads)
         db.touch_follow(kind, key)
         process_after_scan()
+        new = db.ads_first_seen_since("page_id" if kind == "page" else "domain", key, started)
+        if new:
+            name = next((f["name"] for f in db.list_follows() if f["kind"] == kind and f["key"] == key), None) or key
+            log(f"{name}: {new} QC mới")
+            notify.follow_update(name, new, log)
         return len(ads)
     return run
 
@@ -163,19 +190,15 @@ def fetch_social_covers():
     config.THUMB_DIR.mkdir(parents=True, exist_ok=True)
     headers = {"User-Agent": landing.UA}
     with httpx.Client(timeout=20, follow_redirects=True, headers=headers) as c:
-        for v in todo:
-            if should_stop():
-                return
+        def work(v):
             ref = {"tiktok": "https://www.tiktok.com/", "tiktok_ads": "https://ads.tiktok.com/",
                    "fb_reels": "https://www.facebook.com/"}.get(v["platform"])
-            try:
-                r = c.get(v["cover_url"], headers={"Referer": ref} if ref else None)
-                r.raise_for_status()
-                name = "s_" + "".join(ch if ch.isalnum() else "_" for ch in v["vid"]) + ".jpg"
-                (config.THUMB_DIR / name).write_bytes(r.content)
-                db.set_social_cover(v["vid"], name)
-            except Exception as e:
-                log(f"  bỏ qua ảnh bìa {v['vid']}: {e}")
+            r = c.get(v["cover_url"], headers={"Referer": ref} if ref else None)
+            r.raise_for_status()
+            name = "s_" + "".join(ch if ch.isalnum() else "_" for ch in v["vid"]) + ".jpg"
+            (config.THUMB_DIR / name).write_bytes(r.content)
+            db.set_social_cover(v["vid"], name)
+        _parallel(todo, work, "ảnh bìa")
 
 
 def social_job(platform, keyword, country, max_items, period=7):
@@ -191,6 +214,10 @@ def social_job(platform, keyword, country, max_items, period=7):
         db.upsert_social(items, keyword or None)
         db.touch_social_watch(platform, keyword)
         fetch_social_covers()
+        vids = {it["vid"] for it in items}
+        snaps = db.social_snapshots(vids)
+        notify.check_social([social.summarize(r, snaps.get(r["vid"], [])) for r in db.social_rows(platform)
+                             if r["vid"] in vids], log)
         return len(items)
     return run
 

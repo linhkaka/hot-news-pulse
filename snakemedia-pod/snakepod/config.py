@@ -33,8 +33,12 @@ PAGE_GAP_S = (20, 45)           # đào sâu nhiều page: nghỉ ngẫu nhiên 
 
 AUTO_SCAN_HOUR = 1             # giờ tự quét mỗi đêm (giờ máy tính), sửa được trên giao diện
 
+HTTP_WORKERS = 8                # số luồng tải ảnh / đọc trang bán cùng lúc (không đụng Facebook/TikTok)
+
 # Gom QC cùng 1 video: 2 ảnh thumbnail khác nhau <= N bit (dHash 64 bit) coi như cùng video
 DHASH_MAX_DISTANCE = 6
+# Ảnh hơi khác hơn (video bị cắt, thêm chữ) vẫn gom nếu QC có cùng nội dung chữ hoặc cùng sản phẩm trên trang bán
+DHASH_LOOSE_DISTANCE = 12
 
 # Luật chấm nhãn (đơn vị: ngày)
 SCALE_MAX_DAYS = 7             # QC đang chạy < 7 ngày  -> "Scale" (mới lên)

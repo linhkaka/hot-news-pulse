@@ -3,13 +3,13 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 import threading
 
-from . import config, db, jobs, safety, social
+from . import config, db, diag, jobs, notify, safety, social
 
 STATIC = Path(__file__).parent / "static"
 LABELS = {"sap_win": "Sắp WIN", "win": "Video Win", "scale": "Video scale", "theo_doi": "Chờ thêm dữ liệu",
@@ -56,6 +56,13 @@ class LimitsIn(BaseModel):
     max_per_day: int
 
 
+class NotifyIn(BaseModel):
+    telegram_token: str | None = None      # bỏ trống = giữ token cũ; "" = xoá
+    telegram_chat_id: str | None = None
+    windows: bool | None = None
+    events: dict | None = None
+
+
 class AutoIn(BaseModel):
     enabled: bool
     hour: int
@@ -85,7 +92,7 @@ def _facets(items):
 @app.get("/api/videos")
 def videos(label: str | None = None, q: str | None = None, product_type: str | None = None,
            niche: str | None = None, pod: bool = False, page_id: str | None = None, shop: str | None = None,
-           spread: bool = False):
+           spread: bool = False, product: str | None = None, offset: int = 0, limit: int = 60):
     items = db.list_videos(label)
     if spread:   # QC Facebook đang lan nhanh: xếp theo số QC mới 48h
         items = sorted((v for v in items if v.get("spreading")),
@@ -100,14 +107,23 @@ def videos(label: str | None = None, q: str | None = None, product_type: str | N
         items = [v for v in items if page_id in v["page_ids"]]
     if shop:
         items = [v for v in items if shop in v["shops"]]
+    if product:
+        items = [v for v in items if v.get("product_key") == product]
     facets = _facets(items)
     if product_type:
         items = [v for v in items if v.get("product_type") == product_type]
     if niche:
         items = [v for v in items if niche in (v.get("niches") or [])]
-    for v in items:
+    page = _page(items, offset, limit)
+    for v in page:
         v.pop("ads", None)
-    return {"items": items[:500], "total": len(items), "facets": facets}
+    return {"items": page, "total": len(items), "offset": max(0, offset), "facets": facets}
+
+
+def _page(items, offset, limit):
+    limit = max(1, min(limit, 200))
+    offset = max(0, offset)
+    return items[offset:offset + limit]
 
 
 # ---- video viral: TikTok / TikTok Top Ads / Facebook Reels ----
@@ -125,7 +141,8 @@ SOCIAL_SORTS = {"vph": lambda v: v["sort_vph"], "views": lambda v: v.get("views"
 
 @app.get("/api/viral")
 def viral(platform: str | None = None, label: str | None = None, q: str | None = None,
-          product_type: str | None = None, niche: str | None = None, pod: bool = False, sort: str = "vph"):
+          product_type: str | None = None, niche: str | None = None, pod: bool = False, sort: str = "vph",
+          offset: int = 0, limit: int = 60):
     items = _social_list(platform)
     counts = {k: 0 for k in social.LABELS}
     for v in items:
@@ -144,9 +161,10 @@ def viral(platform: str | None = None, label: str | None = None, q: str | None =
     if niche:
         items = [v for v in items if niche in v["niches"]]
     items.sort(key=SOCIAL_SORTS.get(sort, SOCIAL_SORTS["vph"]), reverse=True)
-    for v in items:
+    page = _page(items, offset, limit)
+    for v in page:
         v.pop("snapshots", None)
-    return {"items": items[:500], "total": len(items), "facets": facets, "counts": counts,
+    return {"items": page, "total": len(items), "offset": max(0, offset), "facets": facets, "counts": counts,
             "labels": social.LABELS, "platforms": social.PLATFORMS}
 
 
@@ -216,6 +234,57 @@ def safety_limits(body: LimitsIn):
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"ok": True}
+
+
+# ---- thông báo Telegram / Windows ----
+
+@app.get("/api/notify")
+def notify_get():
+    return notify.public_settings()
+
+
+@app.post("/api/notify")
+def notify_save(body: NotifyIn):
+    notify.save_settings(body.telegram_token, body.telegram_chat_id, body.windows, body.events)
+    return notify.public_settings()
+
+
+@app.post("/api/notify/find-chat")
+def notify_find_chat():
+    s = notify.settings()
+    if not s["telegram_token"]:
+        raise HTTPException(400, "Chưa nhập token bot Telegram")
+    try:
+        chat = notify.find_chat_id(s["telegram_token"])
+    except Exception as e:
+        raise HTTPException(400, f"Không đọc được tin nhắn của bot: {e}")
+    if not chat:
+        raise HTTPException(400, "Chưa thấy tin nhắn nào. Mở Telegram, nhắn /start cho bot của bạn rồi bấm lại.")
+    notify.save_settings(telegram_chat_id=chat)
+    return notify.public_settings()
+
+
+@app.post("/api/notify/test")
+def notify_test():
+    msgs = []
+    sent = notify.send("🐍 SNAKEMEDIA POD: thử thông báo", ["Nếu bạn thấy tin này, thông báo đã chạy."], msgs.append)
+    if not sent:
+        raise HTTPException(400, "; ".join(msgs) or "Chưa bật kênh nào (nhập Telegram hoặc bật thông báo Windows)")
+    return {"sent": sent, "errors": msgs}
+
+
+@app.get("/api/diag")
+def diag_list():
+    return diag.list_bundles()
+
+
+@app.get("/api/diag/{name}/download")
+def diag_download(name: str):
+    data = diag.zip_bundle(name)
+    if data is None:
+        raise HTTPException(404)
+    return Response(data, media_type="application/zip",
+                    headers={"Content-Disposition": f'attachment; filename="{name}.zip"'})
 
 
 @app.post("/api/login/{site}")

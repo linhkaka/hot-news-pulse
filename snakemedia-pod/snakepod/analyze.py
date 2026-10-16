@@ -4,8 +4,10 @@ Một "video" = nhóm QC dùng chung 1 nội dung, trên mọi page/shop, cả Q
 Tuổi video = ngày QC SỚM NHẤT trong nhóm, nên shop có đổi caption/đổi page/lên bài mới
 thì cũng không giấu được tuổi thật.
 """
+import re
 import time
 from collections import Counter, defaultdict
+from urllib.parse import urlparse
 
 from . import config, pod
 
@@ -29,8 +31,57 @@ class _UnionFind:
             self.parent[max(ra, rb)] = min(ra, rb)
 
 
-def cluster(ads, max_distance=config.DHASH_MAX_DISTANCE):
-    """Trả về {cid: [ad, ...]}. Gom theo: cùng collation của Facebook, cùng link video, ảnh gần giống."""
+_WORD_RE = re.compile(r"[a-z0-9]+")
+_HANDLE_RE = re.compile(r"/products?/([^/?#]+)")
+
+
+def text_key(body):
+    """12 chữ đầu của nội dung QC (bỏ emoji, dấu câu). Quá ngắn thì không dùng."""
+    words = _WORD_RE.findall((body or "").lower())
+    return " ".join(words[:12]) if len(words) >= 4 else None
+
+
+def product_key(link_url):
+    """Tên sản phẩm trong link trang bán: .../products/personalized-dog-mom-shirt -> 'personalized-dog-mom-shirt'.
+    Tên quá chung chung (ngắn, ít gạch nối) thì bỏ qua để không gom nhầm."""
+    if not link_url:
+        return None
+    m = _HANDLE_RE.search(urlparse(link_url).path)
+    if not m:
+        return None
+    handle = re.sub(r"-\d+$", "", m.group(1).lower())
+    return handle if len(handle) >= 10 and handle.count("-") >= 2 else None
+
+
+def near_pairs(hashes, max_distance):
+    """Các cặp (i, j) có khoảng cách bit <= max_distance, không cần so mọi cặp.
+
+    Chia 64 bit thành max_distance+1 khúc: 2 hash lệch <= max_distance bit chắc chắn trùng nguyên 1 khúc
+    (nguyên lý chuồng bồ câu), nên chỉ cần so các hash cùng khúc.
+    """
+    n = max_distance + 1
+    bounds = [round(64 * k / n) for k in range(n + 1)]
+    buckets = defaultdict(list)
+    for idx, h in enumerate(hashes):
+        for c in range(n):
+            lo, hi = bounds[c], bounds[c + 1]
+            buckets[(c, (h >> lo) & ((1 << (hi - lo)) - 1))].append(idx)
+    seen = set()
+    for members in buckets.values():
+        for a in range(len(members)):
+            for b in range(a + 1, len(members)):
+                i, j = members[a], members[b]
+                if (i, j) not in seen and (hashes[i] ^ hashes[j]).bit_count() <= max_distance:
+                    seen.add((i, j))
+    return seen
+
+
+def cluster(ads, max_distance=config.DHASH_MAX_DISTANCE, loose_distance=config.DHASH_LOOSE_DISTANCE):
+    """Trả về {cid: [ad, ...]}. Gom QC cùng 1 video theo:
+      1. cùng collation của Facebook;
+      2. ảnh thumbnail gần giống (<= max_distance bit);
+      3. ảnh hơi khác (<= loose_distance bit, vd video bị cắt/thêm chữ) NHƯNG cùng nội dung chữ hoặc cùng sản phẩm.
+    """
     uf = _UnionFind()
     by_key = defaultdict(list)
     for a in ads:
@@ -43,13 +94,25 @@ def cluster(ads, max_distance=config.DHASH_MAX_DISTANCE):
         for other in ids[1:]:
             uf.union(ids[0], other)
 
-    # So sánh các hash khác nhau nhưng gần giống (video bị cắt/nén lại)
     hashes = sorted({a["dhash"] for a in ads if a.get("dhash")})
     ints = [int(h, 16) for h in hashes]
-    for i in range(len(ints)):
-        for j in range(i + 1, len(ints)):
-            if (ints[i] ^ ints[j]).bit_count() <= max_distance:
-                uf.union(by_key["h:" + hashes[i]][0], by_key["h:" + hashes[j]][0])
+    for i, j in near_pairs(ints, max_distance):
+        uf.union(by_key["h:" + hashes[i]][0], by_key["h:" + hashes[j]][0])
+
+    # Mức lỏng: chỉ so các ảnh có chung nội dung chữ hoặc chung sản phẩm (nhóm nhỏ -> so từng cặp được)
+    groups_by_hint = defaultdict(set)
+    for a in ads:
+        if not a.get("dhash"):
+            continue
+        for hint in (text_key(a.get("body")), product_key(a.get("link_url"))):
+            if hint:
+                groups_by_hint[hint].add(a["dhash"])
+    for members in groups_by_hint.values():
+        members = sorted(members)[:300]
+        for x in range(len(members)):
+            for y in range(x + 1, len(members)):
+                if (int(members[x], 16) ^ int(members[y], 16)).bit_count() <= loose_distance:
+                    uf.union(by_key["h:" + members[x]][0], by_key["h:" + members[y]][0])
 
     groups = defaultdict(list)
     for a in ads:
@@ -219,6 +282,16 @@ def _label(video_age, landing_age, page_old, shops_active, shops_win, buckets):
 
 
 def build_videos(ads, landings, now=None):
-    videos = [summarize(cid, group, landings, now) for cid, group in cluster(ads).items()]
+    clusters = cluster(ads)
+    videos = [summarize(cid, group, landings, now) for cid, group in clusters.items()]
+    # Cùng 1 sản phẩm thường có nhiều video khác nhau -> đếm để hiện "sản phẩm này có N video"
+    per_product = Counter()
+    for v, group in zip(videos, clusters.values()):
+        keys = Counter(k for a in group if (k := product_key(a.get("link_url"))))
+        v["product_key"] = keys.most_common(1)[0][0] if keys else None
+        if v["product_key"]:
+            per_product[v["product_key"]] += 1
+    for v in videos:
+        v["product_videos"] = per_product.get(v["product_key"], 1) if v["product_key"] else 1
     videos.sort(key=lambda v: v["ads_per_day"], reverse=True)
     return videos

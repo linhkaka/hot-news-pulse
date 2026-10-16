@@ -16,7 +16,7 @@ const enc = encodeURIComponent;
 const act = (name, ...args) => `data-act="${name}" data-args="${esc(JSON.stringify(args))}"`;
 const LABEL = {sap_win: ["Sắp WIN", "p"], win: ["Video Win", "g"], scale: ["Video scale", ""], theo_doi: ["Chờ thêm dữ liệu", ""],
   trang_cu: ["Trang bán cũ", "r"], cu: ["Video già", "r"]};
-const TITLES = {safety: "Chế độ an toàn", viral: "Video viral", spread: "QC Facebook đang lan nhanh", overview: "Tổng quan", scan: "Quét từ khoá", all: "Tất cả video", niches: "Niche POD",
+const TITLES = {notify: "Thông báo", safety: "Chế độ an toàn", viral: "Video viral", spread: "QC Facebook đang lan nhanh", overview: "Tổng quan", scan: "Quét từ khoá", all: "Tất cả video", niches: "Niche POD",
   follows: "Theo dõi đặc biệt", keywords: "Tự quét mỗi đêm", shops: "Kho shop"};
 const DATE_SOURCE = {api: "dữ liệu sản phẩm", uuid: "ước tính từ mã sản phẩm", anh: "ước tính từ ảnh sản phẩm"};
 const POD_KEYWORDS = ["personalized dog shirt", "custom name mug", "personalized ornament", "nurse shirt", "teacher mug",
@@ -34,19 +34,26 @@ const num = n => n == null ? "?" : n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 
   : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n);
 const cover = v => v.cover_path ? `/thumbs/${encodeURIComponent(v.cover_path)}` : (v.cover_url || "");
 // Bộ lọc dùng chung cho các màn hình danh sách video
-const filters = {product_type: "", niche: "", pod: false, page_id: "", shop: "", scopeName: ""};
+const filters = {product_type: "", niche: "", pod: false, page_id: "", shop: "", product: "", scopeName: ""};
 
-function setView(v) { view = v; location.hash = v; render(); }
+// Kiểu xem (danh sách / lưới) nhớ trong trình duyệt; trang hiện tại về 0 mỗi khi đổi mục hoặc bộ lọc
+let layout = "list", pageOffset = 0;
+try { layout = localStorage.getItem("snakepod.layout") || "list"; } catch {}
+const PAGE = 60;
+function setLayout(l) { layout = l; try { localStorage.setItem("snakepod.layout", l); } catch {} render(); }
+function goPage(off) { pageOffset = Math.max(0, off); render(); window.scrollTo(0, 0); }
+
+function setView(v) { if (v !== view) closeDrawer(); view = v; pageOffset = 0; location.hash = v; render(); }
 document.querySelectorAll("#nav a").forEach(a => a.onclick = () => { clearScope(false); setView(a.dataset.view); });
-window.onhashchange = () => { const v = location.hash.slice(1); if (v && v !== view) { view = v; render(); } };
-let t; $("#search").oninput = () => { clearTimeout(t); t = setTimeout(render, 250); };
+window.onhashchange = () => { const v = location.hash.slice(1); if (v && v !== view) { closeDrawer(); view = v; pageOffset = 0; render(); } };
+let t; $("#search").oninput = () => { clearTimeout(t); t = setTimeout(() => { pageOffset = 0; render(); }, 250); };
 
-function clearScope(rerender = true) { filters.page_id = filters.shop = filters.scopeName = ""; if (rerender) render(); }
+function clearScope(rerender = true) { filters.page_id = filters.shop = filters.product = filters.scopeName = ""; pageOffset = 0; if (rerender) render(); }
 function showScope(kind, key, name) {
   filters.page_id = kind === "page" ? key : ""; filters.shop = kind === "shop" ? key : "";
   filters.scopeName = name || key; setView("all");
 }
-function filterBy(key, value) { filters[key] = value; if (!LABEL[view] && view !== "all") setView("all"); else render(); }
+function filterBy(key, value) { filters[key] = value; pageOffset = 0; if (!LABEL[view] && view !== "all") setView("all"); else render(); }
 
 async function refreshCounts() {
   const s = await api("/api/stats");
@@ -89,7 +96,38 @@ function filterBar(facets) {
     <select onchange="filterBy('product_type', this.value)"><option value="">Mọi loại sản phẩm</option>${opt(facets.product_types, filters.product_type)}</select>
     <select onchange="filterBy('niche', this.value)"><option value="">Mọi niche</option>${opt(facets.niches, filters.niche)}</select>
     <label><input type="checkbox" ${filters.pod ? "checked" : ""} onchange="filterBy('pod', this.checked)"> Chỉ POD</label>
+    ${layoutToggle()}
   </div>`;
+}
+
+function layoutToggle() {
+  return `<span class="seg" style="margin-left:auto"><button class="small ${layout === "list" ? "on" : ""}" ${act("setLayout", "list")}>☰ Danh sách</button><button class="small ${layout === "grid" ? "on" : ""}" ${act("setLayout", "grid")}>▦ Lưới</button></span>`;
+}
+
+function pager(total) {
+  if (total <= PAGE) return total ? `<div class="pager note">${total} video</div>` : "";
+  const pages = Math.ceil(total / PAGE), cur = Math.floor(pageOffset / PAGE) + 1;
+  return `<div class="pager"><button class="small" ${cur > 1 ? act("goPage", pageOffset - PAGE) : "disabled"}>← Trước</button>
+    <span class="note">Trang ${cur} / ${pages} · ${total} video</span>
+    <button class="small" ${cur < pages ? act("goPage", pageOffset + PAGE) : "disabled"}>Sau →</button></div>`;
+}
+
+// Ô lưới: ảnh lớn, rê chuột để xem trước video (nếu link video còn hạn)
+function gridCard(attrs, img, video, chip, title, meta) {
+  return `<div class="gcard" ${attrs} ${video ? `data-video="${esc(video)}"` : ""}>
+    <div class="gimg">${img ? `<img loading="lazy" src="${esc(img)}">` : ""}${chip}${video ? `<span class="play">▶</span>` : ""}</div>
+    <div class="gbody"><div class="gt">${esc(title)}</div><div class="m">${meta}</div></div></div>`;
+}
+
+function fbCard(v) {
+  const [ln, cls] = LABEL[v.label] || [v.label, ""];
+  return gridCard(`data-cid="${esc(v.cid)}"`, thumb(v), v.video_url, `<span class="chip ${cls} gchip">${ln}</span>`, v.title,
+    `${v.price ? "$" + esc(v.price) + " · " : ""}video ${days(v.video_age_days)} · ${v.shops_active}/${v.shops_total} shop · ${v.ads_per_day} QC/ngày${podChips(v)}`);
+}
+
+function wrapItems(items, rowFn, cardFn) {
+  return layout === "grid" ? `<div class="grid">${items.map(cardFn).join("")}</div>`
+    : `<div class="list">${items.map(rowFn).join("")}</div>`;
 }
 
 async function renderList(label, extra = {}) {
@@ -97,14 +135,15 @@ async function renderList(label, extra = {}) {
   const q = $("#search").value.trim();
   if (label) p.set("label", label);
   if (q) p.set("q", q);
-  for (const k of ["product_type", "niche", "page_id", "shop"]) if (filters[k]) p.set(k, filters[k]);
+  for (const k of ["product_type", "niche", "page_id", "shop", "product"]) if (filters[k]) p.set(k, filters[k]);
   if (filters.pod) p.set("pod", "true");
-  const {items, facets} = await api("/api/videos?" + p);
+  p.set("offset", pageOffset); p.set("limit", PAGE);
+  const {items, facets, total} = await api("/api/videos?" + p);
   const bar = filterBar(facets);
-  if (extra.spread) $("#cnt-spread").textContent = items.length;
+  if (extra.spread) $("#cnt-spread").textContent = total;
   const note = extra.spread ? `<p class="note">Video có ≥ 5 QC mới hoặc ≥ 2 shop mới chép trong 48 giờ qua (sửa trong config.py). Đây là dấu hiệu một video đang được nhiều người đổ tiền cùng lúc.</p>` : "";
   if (!items.length) return note + bar + `<div class="list"><div class="empty">Chưa có video nào ở mục này.<br>Vào <a onclick="setView('scan')"><b>Quét từ khoá</b></a> để bắt đầu.</div></div>`;
-  return note + bar + `<div class="list">${items.map(row).join("")}</div>`;
+  return note + bar + wrapItems(items, row, fbCard) + pager(total);
 }
 
 // ---------------- Video viral ----------------
@@ -142,8 +181,9 @@ async function renderViral() {
   for (const k of ["platform", "label"]) if (viralFilters[k]) p.set(k, viralFilters[k]);
   for (const k of ["product_type", "niche"]) if (filters[k]) p.set(k, filters[k]);
   if (filters.pod) p.set("pod", "true");
+  p.set("offset", pageOffset); p.set("limit", PAGE);
   const [res, kws] = await Promise.all([api("/api/viral?" + p), api("/api/viral/keywords")]);
-  const {items, facets, counts} = res;
+  const {items, facets, counts, total} = res;
   $("#cnt-viral").textContent = (counts.dang_no || 0) + (counts.viral || 0);
   const opt = (obj, cur, all) => `<option value="">${all}</option>` + Object.entries(obj).map(([k, n]) =>
     `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(n)}</option>`).join("");
@@ -163,16 +203,26 @@ async function renderViral() {
   const labelChips = `<div class="chips">${Object.entries(VLABEL).map(([k, [n, c]]) =>
     `<span class="chip ${c}" ${act("viralFilter", "label", viralFilters.label === k ? "" : k)} style="${viralFilters.label === k ? "outline:2px solid currentColor" : ""}">${n} (${counts[k] || 0})</span>`).join("")}</div>`;
   const bar = `<div class="filters">
-    <select onchange="viralFilters.platform=this.value;render()">${opt(PLATFORM, viralFilters.platform, "Mọi nền tảng")}</select>
+    <select onchange="viralFilters.platform=this.value;pageOffset=0;render()">${opt(PLATFORM, viralFilters.platform, "Mọi nền tảng")}</select>
     <select onchange="filterBy('product_type', this.value)"><option value="">Mọi loại sản phẩm</option>${fopt(facets.product_types, filters.product_type)}</select>
     <select onchange="filterBy('niche', this.value)"><option value="">Mọi niche</option>${fopt(facets.niches, filters.niche)}</select>
     <label><input type="checkbox" ${filters.pod ? "checked" : ""} onchange="filterBy('pod', this.checked)"> Chỉ POD</label>
-    <select onchange="viralFilters.sort=this.value;render()">${Object.entries(SORTS).map(([k, n]) =>
+    <select onchange="viralFilters.sort=this.value;pageOffset=0;render()">${Object.entries(SORTS).map(([k, n]) =>
       `<option value="${k}" ${k === viralFilters.sort ? "selected" : ""}>${n}</option>`).join("")}</select>
+    ${layoutToggle()}
   </div>`;
-  const list = items.length ? `<div class="list">${items.map(socialRow).join("")}</div>`
+  const list = items.length ? wrapItems(items, socialRow, socialCard) + pager(total)
     : `<div class="list"><div class="empty">Chưa có video viral nào. Nhập từ khoá ở trên rồi bấm Quét.</div></div>`;
   return form + labelChips + bar + list;
+}
+
+function socialCard(v) {
+  const [ln, cls] = VLABEL[v.label] || [v.label, ""];
+  const meta = v.platform === "tiktok_ads"
+    ? `${esc(PLATFORM[v.platform])} · ❤ ${num(v.likes)}${v.extra.ctr != null ? " · CTR " + esc(v.extra.ctr) : ""}`
+    : `${esc(PLATFORM[v.platform])} · <b>${num(v.views)}</b> xem · <b>${num(v.vph)}</b>/giờ · ${days(v.age_days)}`;
+  return gridCard(`data-vid="${esc(v.vid)}"`, cover(v), v.video_url, `<span class="chip ${cls} gchip">${ln}</span>`,
+    v.caption || "(không có mô tả)", meta + podChips(v));
 }
 
 async function openSocial(vid) {
@@ -229,7 +279,7 @@ function renderAlert(blocked) {
 }
 
 async function renderSafety() {
-  const {platforms, tips} = await api("/api/safety");
+  const [{platforms, tips}, bundles] = await Promise.all([api("/api/safety"), api("/api/diag")]);
   return `<p class="note">Tool không che giấu việc tự động hoá. Nó giảm nguy cơ bị checkpoint bằng cách quét chậm như người thật,
     giới hạn số lần quét mỗi ngày, và <b>dừng ngay</b> khi Facebook/TikTok hiện checkpoint, captcha hoặc bắt đăng nhập lại.</p>
     <div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">${platforms.map(p => `<div class="card">
@@ -246,7 +296,59 @@ async function renderSafety() {
         <button class="small">Lưu</button>
         <button type="button" class="small" ${act("openLogin", SITE[p.key])}>Đăng nhập ${esc(p.name)}</button></form>
     </div>`).join("")}</div>
-    <div class="card"><b>Lời khuyên để tài khoản an toàn</b><ul class="tips">${tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>`;
+    <div class="card"><b>Lời khuyên để tài khoản an toàn</b><ul class="tips">${tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>
+    ${diagSection(bundles)}`;
+}
+
+// ---------------- Thông báo + gói chẩn đoán ----------------
+
+const EVENT_NAMES = {sap_win: "Video Sắp WIN mới", win: "Video Win mới", viral: "Video TikTok/Reels Đang nổ hoặc Viral mới",
+  follow: "Page/shop đang theo dõi lên QC mới"};
+
+async function renderNotify() {
+  const n = await api("/api/notify");
+  return `<div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(360px,1fr))">
+    <div class="card"><b style="font-size:16px">Telegram (điện thoại)</b>
+      <ol class="tips">
+        <li>Mở Telegram, tìm <b>@BotFather</b>, gửi <code>/newbot</code>, đặt tên → nhận <b>token</b>.</li>
+        <li>Dán token vào ô dưới rồi bấm <b>Lưu</b>.</li>
+        <li>Mở bot vừa tạo, bấm <b>Start</b> (gửi /start).</li>
+        <li>Bấm <b>Tự lấy chat ID</b>, rồi <b>Gửi thử</b>.</li></ol>
+      <form class="toolbar" id="notifyForm" style="margin-top:10px">
+        <input name="telegram_token" type="password" placeholder="${n.has_token ? "Đã lưu token " + esc(n.token_hint) + " (nhập để đổi)" : "Token bot, vd 123456:ABC..."}" style="flex:1;min-width:220px" autocomplete="off">
+        <input name="telegram_chat_id" placeholder="Chat ID" value="${esc(n.telegram_chat_id)}" style="width:140px">
+        <button class="small primary">Lưu</button></form>
+      <div class="toolbar"><button class="small" ${act("findChat")}>Tự lấy chat ID</button>
+        <button class="small" ${act("testNotify")}>Gửi thử</button>
+        ${n.has_token ? `<button class="small" ${act("clearToken")}>Xoá token</button>` : ""}</div>
+      <p class="note" style="margin:0">Token chỉ lưu trên máy bạn.</p></div>
+    <div class="card"><b style="font-size:16px">Báo khi nào</b>
+      <form id="eventsForm" style="margin-top:8px">${Object.entries(EVENT_NAMES).map(([k, name]) =>
+        `<label class="check" style="display:block"><input type="checkbox" name="${k}" ${n.events[k] ? "checked" : ""}> ${name}</label>`).join("")}
+        <label class="check" style="display:block;margin-top:10px"><input type="checkbox" name="windows" ${n.windows ? "checked" : ""}> Hiện thông báo góc màn hình Windows</label>
+        <button class="small" style="margin-top:10px">Lưu</button></form>
+      <p class="note">Mỗi video chỉ báo 1 lần. Video đã có từ trước khi bật thông báo sẽ không bị báo lại.</p></div></div>`;
+}
+
+async function findChat() {
+  try { const n = await post("/api/notify/find-chat"); alert("Đã lấy chat ID: " + n.telegram_chat_id); render(); }
+  catch (e) { alert(e.message); }
+}
+async function testNotify() {
+  try { const r = await post("/api/notify/test"); alert("Đã gửi tới: " + r.sent.join(", ") + (r.errors.length ? "\nLỗi: " + r.errors.join("; ") : "")); }
+  catch (e) { alert(e.message); }
+}
+async function clearToken() { await post("/api/notify", {telegram_token: ""}); render(); }
+
+function diagSection(bundles) {
+  const size = b => b < 1024 * 1024 ? (b / 1024).toFixed(0) + " KB" : (b / 1024 / 1024).toFixed(1) + " MB";
+  return `<div class="card" style="margin-top:12px"><b>Gói chẩn đoán</b>
+    <p class="note">Tool tự lưu khi 1 lượt quét ra 0 kết quả, lỗi, hoặc gặp checkpoint (giữ 15 gói gần nhất).
+    Tải về và gửi cho người hỗ trợ để sửa nhanh. Email đã được che, nhưng trang có thể chứa <b>tên tài khoản</b> của bạn — xem trước khi gửi.</p>
+    ${bundles.length ? `<table><tr><th>Lúc</th><th>Lượt quét</th><th>Lỗi</th><th>Phản hồi</th><th></th></tr>${bundles.map(b =>
+      `<tr><td>${ago(b.ts)}</td><td>${esc(b.label || "")}</td><td>${esc((b.error || "").slice(0, 80))}</td><td>${b.responses ?? "?"} · ${size(b.size)}</td>
+       <td><a class="btn small" href="/api/diag/${enc(b.name)}/download" download>Tải .zip</a></td></tr>`).join("")}</table>`
+      : `<p class="note">Chưa có gói nào — mọi lượt quét đều ra kết quả.</p>`}</div>`;
 }
 
 async function resumePlatform(p) { await post(`/api/safety/resume/${p}`); pollJobs(); render(); }
@@ -370,7 +472,7 @@ async function renderShops() {
       <td class="num ${r.hot ? "green" : ""}">${r.hot}</td><td>${fmtDate(r.first_ts)}</td><td>${fmtDate(r.last_ts)}</td></tr>`).join("")}</table></div>`;
 }
 
-const VIEWS = {safety: renderSafety, viral: renderViral, spread: () => renderList(null, {spread: "true"}), overview: renderOverview, scan: renderScan, niches: renderNiches, follows: renderFollows,
+const VIEWS = {notify: renderNotify, safety: renderSafety, viral: renderViral, spread: () => renderList(null, {spread: "true"}), overview: renderOverview, scan: renderScan, niches: renderNiches, follows: renderFollows,
   keywords: renderKeywords, shops: renderShops};
 
 async function render() {
@@ -382,8 +484,19 @@ async function render() {
     html = VIEWS[view] ? await VIEWS[view]() : await renderList(view === "all" ? null : view);
   } catch (e) { html = `<div class="empty">Lỗi tải dữ liệu: ${esc(e.message)}</div>`; }
   $("#content").innerHTML = html;
-  document.querySelectorAll(".row[data-cid]").forEach(r => r.onclick = () => openDrawer(r.dataset.cid));
-  document.querySelectorAll(".row[data-vid]").forEach(r => r.onclick = () => openSocial(r.dataset.vid));
+  document.querySelectorAll(".row[data-cid], .gcard[data-cid]").forEach(r => r.onclick = () => openDrawer(r.dataset.cid));
+  document.querySelectorAll(".row[data-vid], .gcard[data-vid]").forEach(r => r.onclick = () => openSocial(r.dataset.vid));
+  document.querySelectorAll(".gcard[data-video]").forEach(card => {
+    card.onmouseenter = () => {
+      const box = card.querySelector(".gimg");
+      if (box.querySelector("video")) return;
+      const vd = document.createElement("video");
+      Object.assign(vd, {src: card.dataset.video, muted: true, autoplay: true, loop: true, playsInline: true});
+      vd.onerror = () => vd.remove();          // link video Facebook/TikTok hết hạn -> giữ ảnh
+      box.appendChild(vd);
+    };
+    card.onmouseleave = () => card.querySelectorAll("video").forEach(x => x.remove());
+  });
   bindForms();
   refreshCounts();
 }
@@ -410,6 +523,13 @@ function bindForms() {
     const d = Object.fromEntries(new FormData(f));
     try { await post("/api/safety/limits", {platform: f.dataset.platform, min_gap_s: +d.min_gap_s, max_per_day: +d.max_per_day}); render(); }
     catch (err) { alert(err.message); }
+  });
+  on("#notifyForm", async d => {
+    await post("/api/notify", {telegram_token: d.telegram_token || null, telegram_chat_id: d.telegram_chat_id}); render();
+  });
+  on("#eventsForm", async d => {
+    const events = Object.fromEntries(Object.keys(EVENT_NAMES).map(k => [k, !!d[k]]));
+    await post("/api/notify", {events, windows: !!d.windows}); alert("Đã lưu"); render();
   });
   on("#autoForm", async d => { await post("/api/autoscan", {enabled: !!d.enabled, hour: +d.hour}); render(); });
 }
@@ -461,6 +581,8 @@ async function openDrawer(cid) {
     <div class="kv"><span>Loại sản phẩm</span><b>${esc(v.product_type || "chưa rõ")}${v.personalized ? " · cá nhân hoá" : ""}</b></div>
     <div class="kv"><span>Niche</span><b>${v.niches && v.niches.length ? v.niches.map(n => `<a ${act("niche", n, false)}>${esc(n)}</a>`).join(", ") : "chưa rõ"}</b></div>
     ${v.pod_markers && v.pod_markers.length ? `<div class="kv"><span>App/nền tảng POD trên trang bán</span><b>${v.pod_markers.map(esc).join(", ")}</b></div>` : ""}
+    ${v.product_videos > 1 ? `<div class="kv"><span>Cùng sản phẩm <small class="note">${esc(v.product_key)}</small></span>
+      <b><a ${act("sameProduct", v.product_key)}>${v.product_videos} video →</a></b></div>` : ""}
     <h3>Thị trường</h3>
     <div class="kv"><span>Shop giữ quảng cáo sống 7–14 ngày<br><small class="note">${v.shops_new_post} shop đang lên bài mới</small></span><b>${v.shops_win} / ${v.shops_active}</b></div>
     <div class="kv"><span>Quảng cáo mỗi ngày<br><small class="note">${v.ads_total} QC từ ${fmtDate(v.first_ts)}</small></span><b>${v.ads_per_day}</b></div>
@@ -502,7 +624,8 @@ async function pollJobs() {
   } catch { pollTimer = setTimeout(pollJobs, 8000); }
 }
 
-const ACTIONS = {resumePlatform, openLogin, goSafety: () => setView("safety"), openSocial, removeViralKw, viralFilter: (k, val) => { viralFilters[k] = val; render(); }, showScope, toggleFollow, unfollow, scanFollow, scanKw, removeKw, dig, openDrawer,
+const ACTIONS = {findChat, testNotify, clearToken, resumePlatform, openLogin, goSafety: () => setView("safety"), openSocial, removeViralKw, viralFilter: (k, val) => { viralFilters[k] = val; pageOffset = 0; render(); }, setLayout, goPage,
+  sameProduct: (key) => { filters.product = key; filters.scopeName = "cùng sản phẩm " + key; closeDrawer(); setView("all"); }, showScope, toggleFollow, unfollow, scanFollow, scanKw, removeKw, dig, openDrawer,
   niche: (n, pod) => { filters.niche = n; if (pod) filters.pod = true; closeDrawer(); setView("all"); },
   fillKw: k => { $("#scanForm [name=keyword]").value = k; }};
 document.addEventListener("click", e => {

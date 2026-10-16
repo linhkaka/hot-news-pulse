@@ -11,7 +11,7 @@ from urllib.parse import quote, unquote, urlencode, urlparse
 
 from playwright.sync_api import sync_playwright
 
-from . import config, safety, social
+from . import config, diag, safety, social
 from .fb_parser import parse_html, parse_json_text
 
 BASE = "https://www.facebook.com/ads/library/"
@@ -72,14 +72,16 @@ def open_browser(p, headless=None):
 
 def collect(ctx, url, max_ads, log, stop=lambda: False, *, match=lambda u: "/api/graphql" in u,
             marker="ad_archive_id", parse_text=parse_json_text, parse_page=parse_html, key="ad_id",
-            noun="QC", platform="facebook", click_more=None, prepare=None):
+            noun="QC", platform="facebook", click_more=None, prepare=None, label=None):
     """Mở 1 trang, cuộn tới khi đủ max_ads hoặc hết kết quả, đọc dữ liệu từ các phản hồi JSON của trang.
 
     Mặc định cho Thư viện QC Facebook; TikTok / Facebook Reels truyền bộ lọc và bộ đọc riêng.
     Gặp checkpoint / captcha / trang bắt đăng nhập -> ném safety.CheckpointError và dừng ngay.
+    Ra 0 kết quả hoặc lỗi -> lưu gói chẩn đoán (diag.py) để sửa bộ đọc dữ liệu.
     """
     page = ctx.new_page()
     responses = []
+    raws = []                     # phản hồi thô cho gói chẩn đoán
     page.on("response", lambda r: responses.append(r) if match(r.url) else None)
     items = {}
 
@@ -90,6 +92,8 @@ def collect(ctx, url, max_ads, log, stop=lambda: False, *, match=lambda u: "/api
                 text = r.text()
             except Exception:
                 continue
+            if len(raws) < diag.MAX_RESPONSES:
+                raws.append((r.url, text))
             if any(m in text for m in ((marker,) if isinstance(marker, str) else marker)):
                 for it in parse_text(text):
                     items[it[key]] = it
@@ -125,9 +129,30 @@ def collect(ctx, url, max_ads, log, stop=lambda: False, *, match=lambda u: "/api
             if len(items) != before:
                 log(f"  ... đã đọc {len(items)} {noun}")
         drain()
+        if not items:
+            _save_diag(page, label or f"{platform}-{noun}", url, raws, "Không đọc được kết quả nào", 0, log)
+    except Exception as e:
+        _save_diag(page, label or f"{platform}-{noun}", url, raws, str(e)[:500], len(items), log)
+        raise
     finally:
         page.close()
     return list(items.values())[:max_ads]
+
+
+def _save_diag(page, label, url, raws, error, n_items, log):
+    try:
+        html = page.content()
+    except Exception:
+        html = None
+    try:
+        shot = page.screenshot()
+    except Exception:
+        shot = None
+    try:
+        name = diag.save(label, url, page.url, html, raws, error, n_items, shot)
+        log(f"  Đã lưu gói chẩn đoán '{name}' (mục Chế độ an toàn → Gói chẩn đoán)")
+    except Exception as e:  # không để lỗi lưu chẩn đoán che lỗi thật
+        log(f"  Không lưu được gói chẩn đoán: {e}")
 
 
 def run_collect(url, max_items, log, stop=lambda: False, **kw):

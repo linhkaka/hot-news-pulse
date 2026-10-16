@@ -37,6 +37,7 @@ jobs:
       - name: Run tests (including a real Chromium scan of a fake Ad Library)
         env:
           SNAKEPOD_E2E: "1"
+          SNAKEPOD_NO_TOAST: "1"
         run: python -m pytest -v
 
       - name: Build SnakemediaPOD.exe
@@ -46,6 +47,10 @@ jobs:
         run: |
           dist\SnakemediaPOD\SnakemediaPOD.exe --selftest
           if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Try a Windows notification (informational)
+        continue-on-error: true
+        run: python -c "from snakepod import notify; print('toast shown:', notify.windows_toast('SNAKEMEDIA POD', 'CI test'))"
 
       - name: Build installer
         shell: pwsh
