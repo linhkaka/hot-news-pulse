@@ -4,11 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>SNAKEMEDIA POD</title>
+<link rel="icon" href="/static/logo.svg" type="image/svg+xml">
 <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
 <aside class="side">
-  <div class="brand"><div class="logo">🐍</div><div><b>SNAKEMEDIA POD</b><small id="country">United States</small></div></div>
+  <div class="brand"><img class="logo" src="/static/logo.svg" alt="SNAKEMEDIA">
+    <div><div class="name">SNAKEMEDIA<span class="pod">POD</span></div><small>Spy QC · Viral · POD · US</small></div></div>
   <nav id="nav">
     <a data-view="overview">▦ Tổng quan</a>
     <div class="group">Khám phá</div>
@@ -22,6 +24,7 @@
     <div class="group">Của tôi</div>
     <a data-view="follows">★ Theo dõi đặc biệt <span class="n" id="cnt-follows"></span></a>
     <a data-view="keywords">🌙 Tự quét mỗi đêm <span class="n" id="cnt-keywords"></span></a>
+    <a data-view="safety">🛡 Chế độ an toàn <span class="n" id="cnt-safety"></span></a>
     <div class="group">Thu thập</div>
     <a data-view="scan">🔍 Quét từ khoá</a>
     <a data-view="all">☰ Tất cả video <span class="n" data-count="all"></span></a>
@@ -33,7 +36,9 @@
   </nav>
 </aside>
 <main>
-  <header><h1 id="title">Tổng quan</h1><input id="search" placeholder="Tìm theo nội dung, shop, từ khoá…"></header>
+  <header><h1 id="title">Tổng quan</h1><div class="pills" id="pills"></div>
+    <input id="search" placeholder="Tìm theo nội dung, shop, từ khoá…"></header>
+  <div id="alert"></div>
   <section id="content"></section>
 </main>
 <div id="drawer" class="drawer hidden"></div>

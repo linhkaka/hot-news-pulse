@@ -26,6 +26,11 @@ PROXY_FILE = (DATA_DIR if FROZEN else ROOT) / "proxy.txt"
 CHROMIUM_PATH = os.environ.get("SNAKEPOD_CHROMIUM") or None  # để trống = dùng Chromium do Playwright cài
 HEADLESS = os.environ.get("SNAKEPOD_HEADLESS", "0") == "1"  # mặc định hiện trình duyệt, ít bị chặn hơn
 
+# Chế độ an toàn: cuộn chậm như người thật (mili giây nghỉ giữa 2 lần cuộn, ngẫu nhiên trong khoảng)
+SCROLL_PAUSE_MS = tuple(int(x) for x in os.environ.get("SNAKEPOD_SCROLL_MS", "2500,5500").split(","))
+MAX_SCROLL_ROUNDS = 60          # tối đa số lần cuộn mỗi trang
+PAGE_GAP_S = (20, 45)           # đào sâu nhiều page: nghỉ ngẫu nhiên giữa 2 page (giây)
+
 AUTO_SCAN_HOUR = 1             # giờ tự quét mỗi đêm (giờ máy tính), sửa được trên giao diện
 
 # Gom QC cùng 1 video: 2 ảnh thumbnail khác nhau <= N bit (dHash 64 bit) coi như cùng video

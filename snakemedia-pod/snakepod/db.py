@@ -107,6 +107,11 @@ CREATE TABLE IF NOT EXISTS social_watch (
     last_scan_ts INTEGER,
     PRIMARY KEY (platform, keyword)
 );
+CREATE TABLE IF NOT EXISTS rate_events (
+    platform TEXT,
+    ts INTEGER
+);
+CREATE INDEX IF NOT EXISTS rate_events_p ON rate_events(platform, ts);
 CREATE TABLE IF NOT EXISTS scans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT,
@@ -412,3 +417,20 @@ def touch_social_watch(platform, keyword):
     with _lock, connect() as conn:
         conn.execute("UPDATE social_watch SET last_scan_ts=? WHERE platform=? AND keyword=?",
                      (int(time.time()), platform, keyword))
+
+
+# ---- chế độ an toàn: nhật ký lượt quét theo nền tảng ----
+
+def add_rate_event(platform, ts=None):
+    with _lock, connect() as conn:
+        conn.execute("INSERT INTO rate_events (platform, ts) VALUES (?, ?)", (platform, ts or int(time.time())))
+
+
+def count_rate_events(platform, since):
+    with connect() as conn:
+        return conn.execute("SELECT COUNT(*) FROM rate_events WHERE platform=? AND ts>=?", (platform, since)).fetchone()[0]
+
+
+def last_rate_event(platform):
+    with connect() as conn:
+        return conn.execute("SELECT MAX(ts) FROM rate_events WHERE platform=?", (platform,)).fetchone()[0]

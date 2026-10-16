@@ -16,7 +16,7 @@ const enc = encodeURIComponent;
 const act = (name, ...args) => `data-act="${name}" data-args="${esc(JSON.stringify(args))}"`;
 const LABEL = {sap_win: ["Sắp WIN", "p"], win: ["Video Win", "g"], scale: ["Video scale", ""], theo_doi: ["Chờ thêm dữ liệu", ""],
   trang_cu: ["Trang bán cũ", "r"], cu: ["Video già", "r"]};
-const TITLES = {viral: "Video viral", spread: "QC Facebook đang lan nhanh", overview: "Tổng quan", scan: "Quét từ khoá", all: "Tất cả video", niches: "Niche POD",
+const TITLES = {safety: "Chế độ an toàn", viral: "Video viral", spread: "QC Facebook đang lan nhanh", overview: "Tổng quan", scan: "Quét từ khoá", all: "Tất cả video", niches: "Niche POD",
   follows: "Theo dõi đặc biệt", keywords: "Tự quét mỗi đêm", shops: "Kho shop"};
 const DATE_SOURCE = {api: "dữ liệu sản phẩm", uuid: "ước tính từ mã sản phẩm", anh: "ước tính từ ảnh sản phẩm"};
 const POD_KEYWORDS = ["personalized dog shirt", "custom name mug", "personalized ornament", "nurse shirt", "teacher mug",
@@ -210,6 +210,51 @@ async function openSocial(vid) {
   $("#drawer").classList.remove("hidden");
 }
 
+// ---------------- Chế độ an toàn ----------------
+
+const SITE = {facebook: "facebook", tiktok: "tiktok"};
+
+function renderAlert(blocked) {
+  const keys = Object.keys(blocked || {});
+  $("#cnt-safety").textContent = keys.length ? "!" : "";
+  $("#pills").innerHTML = ["facebook", "tiktok"].map(p => `<span class="pill ${blocked[p] ? "bad" : ""}" ${act("goSafety")}
+    title="${blocked[p] ? esc(blocked[p].reason) : "Đang quét bình thường"}"><i></i>${p === "facebook" ? "Facebook" : "TikTok"}</span>`).join("");
+  $("#alert").innerHTML = keys.map(p => `<div class="alert"><div>⚠️</div><div>
+      <b>${esc(blocked[p].reason)}</b> <span class="note">(${ago(blocked[p].ts)})</span><br>
+      Tool đã <b>tạm dừng mọi lượt quét ${p === "facebook" ? "Facebook" : "TikTok"}</b> để bảo vệ tài khoản.
+      Bấm "Mở trình duyệt để xác minh", tự làm theo hướng dẫn của ${p === "facebook" ? "Facebook" : "TikTok"},
+      đóng cửa sổ, nên đợi vài tiếng rồi bấm "Đã xử lý, quét tiếp".</div>
+      <div class="acts"><button class="small" ${act("openLogin", SITE[p])}>Mở trình duyệt để xác minh</button>
+      <button class="small primary" ${act("resumePlatform", p)}>Đã xử lý, quét tiếp</button></div></div>`).join("");
+}
+
+async function renderSafety() {
+  const {platforms, tips} = await api("/api/safety");
+  return `<p class="note">Tool không che giấu việc tự động hoá. Nó giảm nguy cơ bị checkpoint bằng cách quét chậm như người thật,
+    giới hạn số lần quét mỗi ngày, và <b>dừng ngay</b> khi Facebook/TikTok hiện checkpoint, captcha hoặc bắt đăng nhập lại.</p>
+    <div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">${platforms.map(p => `<div class="card">
+      <div style="display:flex;align-items:center;gap:8px"><b style="font-size:16px">${esc(p.name)}</b>
+        ${p.blocked ? `<span class="chip r">Tạm dừng</span>` : `<span class="chip g">Đang chạy bình thường</span>`}</div>
+      ${p.blocked ? `<p class="red" style="font-weight:500">${esc(p.blocked.reason)} · ${ago(p.blocked.ts)}</p>
+        <div class="toolbar"><button class="small" ${act("openLogin", SITE[p.key])}>Mở trình duyệt để xác minh</button>
+        <button class="small primary" ${act("resumePlatform", p.key)}>Đã xử lý, quét tiếp</button></div>` : ""}
+      <div class="kv"><span>Đã quét hôm nay</span><b>${p.used_today} / ${p.max_per_day}</b></div>
+      <div class="kv"><span>Lần quét gần nhất</span><b>${ago(p.last_ts)}</b></div>
+      <form class="toolbar limitsForm" data-platform="${p.key}" style="margin:10px 0 0">
+        <label class="note">Nghỉ tối thiểu <input name="min_gap_s" type="number" min="30" max="3600" value="${p.min_gap_s}" style="width:80px"> giây</label>
+        <label class="note">Tối đa <input name="max_per_day" type="number" min="1" max="500" value="${p.max_per_day}" style="width:70px"> lần/ngày</label>
+        <button class="small">Lưu</button>
+        <button type="button" class="small" ${act("openLogin", SITE[p.key])}>Đăng nhập ${esc(p.name)}</button></form>
+    </div>`).join("")}</div>
+    <div class="card"><b>Lời khuyên để tài khoản an toàn</b><ul class="tips">${tips.map(t => `<li>${esc(t)}</li>`).join("")}</ul></div>`;
+}
+
+async function resumePlatform(p) { await post(`/api/safety/resume/${p}`); pollJobs(); render(); }
+async function openLogin(site) {
+  try { await post(`/api/login/${site}`); alert("Đã mở cửa sổ trình duyệt của tool. Làm xong thì đóng cửa sổ đó."); }
+  catch (e) { alert(e.message); }
+}
+
 async function removeViralKw(platform, keyword) { await del(`/api/viral/keywords/${platform}/${enc(keyword || " ")}`); render(); }
 
 async function renderOverview() {
@@ -325,7 +370,7 @@ async function renderShops() {
       <td class="num ${r.hot ? "green" : ""}">${r.hot}</td><td>${fmtDate(r.first_ts)}</td><td>${fmtDate(r.last_ts)}</td></tr>`).join("")}</table></div>`;
 }
 
-const VIEWS = {viral: renderViral, spread: () => renderList(null, {spread: "true"}), overview: renderOverview, scan: renderScan, niches: renderNiches, follows: renderFollows,
+const VIEWS = {safety: renderSafety, viral: renderViral, spread: () => renderList(null, {spread: "true"}), overview: renderOverview, scan: renderScan, niches: renderNiches, follows: renderFollows,
   keywords: renderKeywords, shops: renderShops};
 
 async function render() {
@@ -359,6 +404,12 @@ function bindForms() {
   on("#viralForm", async (d, f) => {
     await post("/api/viral/scan", {platform: d.platform, keyword: d.keyword, country: d.country, period: +d.period, save: !!d.save});
     f.keyword.value = ""; pollJobs(); render();
+  });
+  document.querySelectorAll(".limitsForm").forEach(f => f.onsubmit = async e => {
+    e.preventDefault();
+    const d = Object.fromEntries(new FormData(f));
+    try { await post("/api/safety/limits", {platform: f.dataset.platform, min_gap_s: +d.min_gap_s, max_per_day: +d.max_per_day}); render(); }
+    catch (err) { alert(err.message); }
   });
   on("#autoForm", async d => { await post("/api/autoscan", {enabled: !!d.enabled, hour: +d.hour}); render(); });
 }
@@ -443,6 +494,7 @@ async function pollJobs() {
     $("#current").textContent = busy ? `Đang chạy: ${s.current}` + (s.pending.length ? ` (+${s.pending.length} chờ)` : "")
       : (s.log.length ? s.log[s.log.length - 1].msg : "Chưa chạy việc nào");
     $("#stopBtn").classList.toggle("hidden", !busy);
+    renderAlert(s.blocked);
     $("#log").textContent = s.log.map(l => new Date(l.ts * 1000).toLocaleTimeString() + "  " + l.msg).join("\n");
     if (wasBusy && !busy) { render(); if (openCid) openDrawer(openCid); if (openVid) openSocial(openVid); }
     wasBusy = busy;
@@ -450,7 +502,7 @@ async function pollJobs() {
   } catch { pollTimer = setTimeout(pollJobs, 8000); }
 }
 
-const ACTIONS = {openSocial, removeViralKw, viralFilter: (k, val) => { viralFilters[k] = val; render(); }, showScope, toggleFollow, unfollow, scanFollow, scanKw, removeKw, dig, openDrawer,
+const ACTIONS = {resumePlatform, openLogin, goSafety: () => setView("safety"), openSocial, removeViralKw, viralFilter: (k, val) => { viralFilters[k] = val; render(); }, showScope, toggleFollow, unfollow, scanFollow, scanKw, removeKw, dig, openDrawer,
   niche: (n, pod) => { filters.niche = n; if (pod) filters.pod = true; closeDrawer(); setView("all"); },
   fillKw: k => { $("#scanForm [name=keyword]").value = k; }};
 document.addEventListener("click", e => {

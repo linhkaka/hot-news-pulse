@@ -7,7 +7,7 @@ from datetime import datetime
 
 import httpx
 
-from . import analyze, config, db, landing
+from . import analyze, config, db, landing, safety
 from .imagehash import dhash
 
 LOG = collections.deque(maxlen=300)
@@ -21,7 +21,8 @@ def log(msg):
 
 
 def status():
-    return {"current": _state["current"], "pending": list(_state["pending"]), "log": list(LOG)[-80:]}
+    return {"current": _state["current"], "pending": list(_state["pending"]), "log": list(LOG)[-80:],
+            "blocked": safety.blocked()}
 
 
 def submit(kind, title, fn):
@@ -48,6 +49,14 @@ def _worker():
             n = fn() or 0
             db.finish_scan(scan_id, "xong" if not _state["stop"] else "da dung", n)
             log(f"Xong: {title}")
+        except safety.Skipped as e:
+            db.finish_scan(scan_id, "bo qua", error=str(e)[:500])
+            log(f"Bỏ qua '{title}': {e}")
+        except safety.CheckpointError as e:
+            safety.block(e.platform, e.reason, e.url)
+            db.finish_scan(scan_id, "checkpoint", error=e.reason)
+            log(f"⚠ {e.reason}. ĐÃ TẠM DỪNG mọi lượt quét {safety.PLATFORMS[e.platform]}. "
+                "Hãy tự xác minh trên trình duyệt rồi bấm 'Đã xử lý, quét tiếp'.")
         except Exception as e:
             db.finish_scan(scan_id, "loi", error=str(e)[:500])
             log(f"Lỗi khi chạy '{title}': {e}")
@@ -116,6 +125,7 @@ def keyword_job(keyword, country, max_ads):
 
     def run():
         log(f"Quét từ khoá '{keyword}' ({country})")
+        safety.before_scan("facebook", log, should_stop)
         ads = scraper.scan_keyword(keyword, country, max_ads, log, should_stop)
         log(f"Đọc được {len(ads)} QC")
         db.upsert_ads(ads, keyword)
@@ -130,6 +140,7 @@ def follow_job(kind, key, country):
     from . import scraper
 
     def run():
+        safety.before_scan("facebook", log, should_stop)
         if kind == "page":
             ads = scraper.scan_pages([key], country, config.DIG_MAX_ADS_PER_PAGE, log, should_stop)
         else:
@@ -174,6 +185,7 @@ def social_job(platform, keyword, country, max_items, period=7):
     def run():
         name = social.PLATFORMS[platform]
         log(f"Quét {name} '{keyword or 'tất cả'}' ({country})")
+        safety.before_scan(safety.platform_of(platform), log, should_stop)
         items = scraper.scan_social(platform, keyword, country, max_items, period, log, should_stop)
         log(f"Đọc được {len(items)} video {name}")
         db.upsert_social(items, keyword or None)
@@ -236,6 +248,7 @@ def dig_job(cid, country):
             return 0
         pages = v["page_ids"][: config.DIG_MAX_PAGES]
         log(f"Đào sâu '{v['title'][:50]}' qua {len(pages)} page")
+        safety.before_scan("facebook", log, should_stop)
         ads = scraper.scan_pages(pages, country, config.DIG_MAX_ADS_PER_PAGE, log, should_stop)
         db.upsert_ads(ads)
         process_after_scan()

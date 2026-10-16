@@ -7,7 +7,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from . import config, db, jobs, social
+import threading
+
+from . import config, db, jobs, safety, social
 
 STATIC = Path(__file__).parent / "static"
 LABELS = {"sap_win": "Sắp WIN", "win": "Video Win", "scale": "Video scale", "theo_doi": "Chờ thêm dữ liệu",
@@ -46,6 +48,12 @@ class SocialScanIn(BaseModel):
     max_items: int = 200
     period: int = 7             # Top Ads: 7 / 30 / 180 ngày
     save: bool = False
+
+
+class LimitsIn(BaseModel):
+    platform: str
+    min_gap_s: int
+    max_per_day: int
 
 
 class AutoIn(BaseModel):
@@ -174,6 +182,52 @@ def viral_detail(vid: str):
     if not r:
         raise HTTPException(404)
     return social.summarize(r, db.social_snapshots({vid}).get(vid, []))
+
+
+# ---- chế độ an toàn ----
+
+SAFETY_TIPS = [
+    "Dùng 1 tài khoản Facebook/TikTok phụ đã dùng bình thường một thời gian, đừng dùng tài khoản mới tạo.",
+    "Không quét khi đang bật VPN đổi quốc gia liên tục. Nếu dùng proxy, dùng 1 proxy dân cư cố định.",
+    "Giữ trình duyệt của tool hiện lên (không chạy ẩn) — nền tảng ít nghi ngờ hơn.",
+    "Gặp checkpoint: tự xác minh trên cửa sổ trình duyệt của tool, đợi vài tiếng rồi mới quét tiếp.",
+    "Đừng tăng giới hạn quét/ngày quá cao; quét đều mỗi đêm an toàn hơn quét dồn một lúc.",
+]
+
+
+@app.get("/api/safety")
+def safety_status():
+    return {"platforms": safety.status(), "tips": SAFETY_TIPS}
+
+
+@app.post("/api/safety/resume/{platform}")
+def safety_resume(platform: str):
+    if platform not in safety.PLATFORMS:
+        raise HTTPException(404)
+    safety.resume(platform)
+    jobs.log(f"Đã mở lại quét {safety.PLATFORMS[platform]}")
+    return {"ok": True}
+
+
+@app.post("/api/safety/limits")
+def safety_limits(body: LimitsIn):
+    try:
+        safety.set_limits(body.platform, body.min_gap_s, body.max_per_day)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
+
+
+@app.post("/api/login/{site}")
+def open_login(site: str):
+    """Mở cửa sổ trình duyệt của tool để bạn tự đăng nhập / xác minh checkpoint."""
+    from . import login
+    if site not in login.SITES:
+        raise HTTPException(404)
+    if jobs.status()["current"]:
+        raise HTTPException(409, "Đang có lượt quét chạy, bấm Dừng rồi thử lại")
+    threading.Thread(target=login.main, args=(site,), daemon=True).start()
+    return {"ok": True}
 
 
 @app.get("/api/niches")

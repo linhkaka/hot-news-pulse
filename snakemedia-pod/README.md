@@ -57,6 +57,23 @@ Mục **Viral** trên menu:
 
 Đăng nhập TikTok: menu Start → **Đăng nhập TikTok** (hoặc `DangNhapTikTok.bat` khi chạy từ mã nguồn).
 
+## Chế độ an toàn (tránh checkpoint)
+
+Tool **không** che giấu việc tự động hoá (không giả dấu vân tay trình duyệt, không tự giải captcha, không xoay
+vòng tài khoản). Nó giảm nguy cơ bị checkpoint bằng cách cư xử như người dùng bình thường:
+
+- Cuộn trang chậm, nghỉ ngẫu nhiên 2,5–5,5 giây giữa các lần cuộn; đào sâu nhiều page thì nghỉ 20–45 giây giữa 2 page.
+- Nghỉ tối thiểu giữa 2 lượt quét cùng nền tảng (mặc định Facebook 90 giây, TikTok 150 giây).
+- Giới hạn số lượt quét mỗi ngày (mặc định Facebook 40, TikTok 20). Sửa trong mục **🛡 Chế độ an toàn**.
+- **Gặp checkpoint, captcha hoặc trang bắt đăng nhập lại → dừng ngay** và tạm dừng mọi lượt quét của nền tảng đó
+  (kể cả lượt tự quét ban đêm). Màn hình hiện băng cảnh báo đỏ: bấm **Mở trình duyệt để xác minh**, tự làm theo
+  hướng dẫn của Facebook/TikTok, đóng cửa sổ, đợi vài tiếng rồi bấm **Đã xử lý, quét tiếp**.
+
+## Đổi logo
+
+Logo nằm ở `snakepod/static/logo.svg` (giao diện) và `packaging/snakepod.ico` (biểu tượng file .exe và bộ cài).
+Thay 2 file này bằng logo của bạn (giữ nguyên tên file) rồi đóng gói lại.
+
 ## Cách 1 (dễ nhất): file cài đặt SnakemediaPOD-Setup.exe
 
 1. Tải **`SnakemediaPOD-Setup.exe`** (trong mục **Releases** của repo, hoặc mục **Actions → SNAKEMEDIA POD installer → Artifacts**).

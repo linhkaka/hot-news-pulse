@@ -112,6 +112,7 @@ window.addEventListener('scroll', async () => {{
 def test_full_scan_against_fake_ad_library(tmp_path, monkeypatch, fake_facebook):
     monkeypatch.setenv("SNAKEPOD_DATA", str(tmp_path))
     monkeypatch.setenv("SNAKEPOD_HEADLESS", "1")
+    monkeypatch.setenv("SNAKEPOD_SCROLL_MS", "300,600")
     if _chromium():
         monkeypatch.setenv("SNAKEPOD_CHROMIUM", _chromium())
     else:

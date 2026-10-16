@@ -1,6 +1,8 @@
 # -*- mode: python -*-
 # Đóng gói SNAKEMEDIA POD thành thư mục chạy độc lập:  pyinstaller packaging/snakepod.spec
 # Muốn kèm sẵn Chromium: chạy "PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium" TRƯỚC khi đóng gói.
+import sys
+
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
 
 ROOT = SPECPATH + "/.."
@@ -13,5 +15,6 @@ a = Analysis(
     excludes=["tkinter", "pytest"],
 )
 pyz = PYZ(a.pure)
-exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="SnakemediaPOD", console=True, upx=False)
+exe = EXE(pyz, a.scripts, [], exclude_binaries=True, name="SnakemediaPOD", console=True, upx=False,
+          icon=ROOT + "/packaging/snakepod.ico" if sys.platform == "win32" else None)
 coll = COLLECT(exe, a.binaries, a.datas, name="SnakemediaPOD", upx=False)

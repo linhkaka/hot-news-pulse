@@ -195,6 +195,9 @@ await fetch('/api/search/item/full/?cursor=1');busy=false;}});</script></body></
 @pytest.mark.skipif(_chromium() is None, reason="không có Chromium")
 def test_scan_tiktok_and_topads_against_fake_sites(app_env, monkeypatch, fake_sites):
     monkeypatch.setenv("SNAKEPOD_HEADLESS", "1")
+    monkeypatch.setenv("SNAKEPOD_SCROLL_MS", "300,600")
+    from snakepod import safety
+    monkeypatch.setitem(safety.DEFAULT_LIMITS, "tiktok", {"min_gap_s": 0, "max_per_day": 100})
     if _chromium():
         monkeypatch.setenv("SNAKEPOD_CHROMIUM", _chromium())
     monkeypatch.delenv("SNAKEPOD_PROXY", raising=False)

@@ -21,6 +21,8 @@ OutputBaseFilename=SnakemediaPOD-Setup
 Compression=lzma2/max
 SolidCompression=yes
 WizardStyle=modern
+SetupIconFile=snakepod.ico
+UninstallDisplayIcon={app}\SnakemediaPOD.exe
 UninstallDisplayName=SNAKEMEDIA POD
 CloseApplications=yes
 
