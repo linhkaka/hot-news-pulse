@@ -3,42 +3,31 @@
 # Copyright (c) Công ty TNHH SNAKEMEDIA. All rights reserved.
 #
 # Chạy cả hệ thống 24/7:   docker compose up -d --build
-#
-# Cấu trúc thư mục giả định (đặt file này ở thư mục gốc richtube-snakemedia/):
-#   richtube-snakemedia/
-#   ├── docker-compose.yml
-#   ├── Dockerfile            # Dockerfile của Backend Python
-#   ├── main.py               # FastAPI app  -> uvicorn main:app
-#   ├── telegram_bot.py       # Telegram Bot
-#   ├── .env                  # GEMINI keys, TELEGRAM token, LARK keys...
-#   └── richtube-web/         # Web Dashboard (Next.js)
-#
-# ⚠️ Nếu tên file của bạn khác (vd: bot.py, app/main.py) thì sửa dòng "command".
+# Trước đó: copy richtube-engine/.env.example thành richtube-engine/.env và điền key.
 # ============================================================================
 
 services:
   # ---------- 1. Backend Engine (FastAPI, cổng 8000) ----------
   richtube-api:
-    build: .
+    build: ./richtube-engine
     container_name: richtube-api
-    command: uvicorn main:app --host 0.0.0.0 --port 8000
-    env_file: .env
+    env_file: ./richtube-engine/.env
     environment:
-      # Các địa chỉ Web được phép gọi API (CORS), ngăn cách bằng dấu phẩy
-      CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}
+      DATA_DIR: /app/data
+    volumes:
+      - richtube-data:/app/data   # giữ kết quả phân tích khi khởi động lại
     ports:
       - "8000:8000"
     restart: unless-stopped
 
   # ---------- 2. Telegram Bot ----------
   richtube-bot:
-    build: .
+    build: ./richtube-engine
     container_name: richtube-bot
     command: python telegram_bot.py
-    env_file: .env
+    env_file: ./richtube-engine/.env
     environment:
-      # Bot gọi Engine qua mạng nội bộ Docker
-      RICHTUBE_API_URL: http://richtube-api:8000
+      RICHTUBE_API_URL: http://richtube-api:8000   # Bot gọi Engine qua mạng nội bộ Docker
     depends_on:
       - richtube-api
     restart: unless-stopped
@@ -49,11 +38,17 @@ services:
       context: ./richtube-web
       args:
         # Địa chỉ mà TRÌNH DUYỆT dùng để gọi API.
-        # Chạy trên máy cá nhân: giữ nguyên. Chạy trên VPS: đổi thành http://<IP-VPS>:8000
+        # Máy cá nhân: giữ nguyên. VPS: đặt RICHTUBE_PUBLIC_API_URL=http://<IP-VPS>:8000
+        # trong file .env nằm cạnh file docker-compose.yml này.
         NEXT_PUBLIC_RICHTUBE_API_URL: ${RICHTUBE_PUBLIC_API_URL:-http://localhost:8000}
+        # Chỉ cần nếu bạn bật RICHTUBE_API_KEY cho Engine
+        NEXT_PUBLIC_RICHTUBE_API_KEY: ${RICHTUBE_API_KEY:-}
     container_name: richtube-web
     ports:
       - "3000:3000"
     depends_on:
       - richtube-api
     restart: unless-stopped
+
+volumes:
+  richtube-data:

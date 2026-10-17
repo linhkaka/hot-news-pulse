@@ -6,7 +6,7 @@
 
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   Radar,
   Flame,
@@ -22,8 +22,8 @@ import {
   Layers,
   CheckCircle2,
 } from "lucide-react";
-import { OutlierRecord } from "@/types/richtube";
-import { triggerVideoSpy, triggerChannelDiscovery, checkEngineHealth } from "@/lib/api";
+import { EngineHealth, Job, OutlierRecord } from "@/types/richtube";
+import { triggerVideoSpy, triggerChannelDiscovery, checkEngineHealth, fetchOutliers, getJob } from "@/lib/api";
 
 const MARKETS = ["US", "JP", "KR", "ES", "DE", "FR"];
 
@@ -125,19 +125,64 @@ const INITIAL_OUTLIERS: OutlierRecord[] = [
 ];
 
 export default function RichTubeDashboard() {
-  const [outliers] = useState<OutlierRecord[]>(INITIAL_OUTLIERS);
+  const [outliers, setOutliers] = useState<OutlierRecord[]>(INITIAL_OUTLIERS);
+  const [isDemoData, setIsDemoData] = useState(true);
   const [selected, setSelected] = useState<OutlierRecord>(INITIAL_OUTLIERS[0]);
   const [spyInput, setSpyInput] = useState("");
   const [selectedMarketFilter, setSelectedMarketFilter] = useState<string>("ALL");
   const [copiedIndex, setCopiedIndex] = useState<string | null>(null);
   const [isTriggering, setIsTriggering] = useState(false);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
-  const [engineOnline, setEngineOnline] = useState<boolean | null>(null);
+  const [health, setHealth] = useState<EngineHealth | null>(null);
+  const engineOnline = health === null ? null : health.status === "online";
 
-  // Kiểm tra trạng thái Backend thật thay vì hiển thị cứng "Active"
-  useEffect(() => {
-    checkEngineHealth().then((h) => setEngineOnline(h?.status !== "offline"));
+  // Tải dữ liệu thật từ RICHTUBE Engine; nếu chưa có thì giữ dữ liệu mẫu
+  const loadOutliers = useCallback(async (focusVideoId?: string) => {
+    try {
+      const records = await fetchOutliers();
+      if (records.length === 0) return;
+      setOutliers(records);
+      setIsDemoData(false);
+      setSelected((current) =>
+        records.find((r) => r.video_id === focusVideoId) ??
+        records.find((r) => r.video_id === current.video_id) ??
+        records[0]
+      );
+    } catch {
+      // Engine offline -> tiếp tục hiển thị dữ liệu mẫu
+    }
   }, []);
+
+  useEffect(() => {
+    checkEngineHealth().then(setHealth);
+    loadOutliers();
+  }, [loadOutliers]);
+
+  // Theo dõi lệnh đang chạy ở Engine cho tới khi xong
+  const watchJob = async (job: Job) => {
+    for (let i = 0; i < 300; i++) {
+      await new Promise((r) => setTimeout(r, 4000));
+      try {
+        const latest = await getJob(job.job_id);
+        if (latest.status === "done") {
+          await loadOutliers(latest.result_video_ids[0]);
+          checkEngineHealth().then(setHealth);
+          setStatusBanner(
+            latest.result_video_ids.length
+              ? `✅ Hoàn tất! Đã mổ xẻ ${latest.result_video_ids.length} video và cập nhật Dashboard.`
+              : "⚠️ Lệnh đã chạy xong nhưng không tìm thấy video outlier phù hợp."
+          );
+          return;
+        }
+        if (latest.status === "failed") {
+          setStatusBanner(`❌ Lệnh thất bại: ${latest.error ?? "không rõ lỗi"}`);
+          return;
+        }
+      } catch {
+        // Mất kết nối tạm thời -> thử lại ở vòng sau
+      }
+    }
+  };
 
   const handleCopy = async (text: string, id: string) => {
     try {
@@ -154,16 +199,22 @@ export default function RichTubeDashboard() {
     setIsTriggering(true);
     setStatusBanner(null);
     try {
+      let job: Job;
       if (mode === "spy") {
-        await triggerVideoSpy(spyInput.trim());
-        setStatusBanner("✅ Đã gửi lệnh mổ xẻ Video xuống RICHTUBE Engine & đồng bộ Lark Base!");
+        job = await triggerVideoSpy(spyInput.trim());
+        setStatusBanner("🔬 Đang mổ xẻ Video (1-3 phút). Kết quả sẽ tự hiện ở đây, gửi Telegram & đồng bộ Lark Base.");
       } else {
-        await triggerChannelDiscovery(spyInput.trim(), MARKETS);
-        setStatusBanner("🌐 Đang truy vết kênh tương tự đa quốc gia & ghép lưới 3x3 về Lark Base!");
+        job = await triggerChannelDiscovery(spyInput.trim(), MARKETS);
+        setStatusBanner("🌐 Đang truy vết kênh tương tự ở 6 thị trường & ghép lưới 3x3 (3-10 phút)...");
       }
       setSpyInput("");
-    } catch {
-      setStatusBanner("⚠️ Không kết nối được Backend (chế độ Demo). Hãy bật RICHTUBE Engine ở cổng 8000 để chạy thực tế.");
+      watchJob(job);
+    } catch (err) {
+      setStatusBanner(
+        err instanceof TypeError
+          ? "⚠️ Không kết nối được Backend (chế độ Demo). Hãy bật RICHTUBE Engine ở cổng 8000 để chạy thực tế."
+          : `⚠️ ${(err as Error).message}`
+      );
     } finally {
       setIsTriggering(false);
     }
@@ -238,16 +289,21 @@ export default function RichTubeDashboard() {
               }`}
             />
             <span className="text-slate-300 font-medium">
-              Engine: {engineOnline === null ? "Đang kiểm tra..." : engineOnline ? "Online" : "Offline (Demo)"}
+              Engine:{" "}
+              {engineOnline === null
+                ? "Đang kiểm tra..."
+                : engineOnline
+                  ? `Online · Gemini Pool ${health?.gemini_pool_size ?? 0} key`
+                  : "Offline (Demo)"}
             </span>
           </div>
           <div
             className={`px-3 py-1.5 rounded-lg bg-slate-900 border border-slate-800 flex items-center gap-1.5 ${
-              selected.lark_synced ? "text-emerald-400" : "text-slate-500"
+              health?.lark_configured ? "text-emerald-400" : "text-slate-500"
             }`}
           >
             <CheckCircle2 className="w-3.5 h-3.5" />
-            <span>{selected.lark_synced ? "Lark Base Synced" : "Chưa đồng bộ Lark"}</span>
+            <span>{health?.lark_configured ? "Lark Base Connected" : "Lark Base chưa cấu hình"}</span>
           </div>
         </div>
       </header>
@@ -275,7 +331,9 @@ export default function RichTubeDashboard() {
                 1. Tín Hiệu Outlier (Pure TAE)
               </h2>
             </div>
-            <span className="text-[11px] text-slate-400">Đã lọc View Ads</span>
+            <span className="text-[11px] text-slate-400">
+              {isDemoData ? "Dữ liệu mẫu" : `${outliers.length} video`}
+            </span>
           </div>
 
           {/* Bộ lọc thị trường (US, JP, KR, ES, DE, FR) */}

@@ -6,6 +6,26 @@
 
 export type Market = "US" | "JP" | "KR" | "ES" | "DE" | "FR";
 
+export interface EngineHealth {
+  status: "online" | "offline";
+  gemini_pool_size: number;
+  youtube_configured: boolean;
+  lark_configured: boolean;
+  telegram_configured: boolean;
+  records: number;
+}
+
+export interface Job {
+  job_id: string;
+  kind: "spy" | "discover";
+  status: "queued" | "running" | "done" | "failed";
+  input: string;
+  created_at: string;
+  finished_at?: string | null;
+  error?: string | null;
+  result_video_ids: string[];
+}
+
 export interface HeatmapPoint {
   time_range: string;
   intensity: number; // 0.0 -> 1.0
@@ -33,7 +53,8 @@ export interface OutlierRecord {
   video_id: string;
   title: string;
   channel_name: string;
-  market: Market;
+  // Thị trường ngoài danh sách chính sẽ là mã quốc gia khác (vd: "VN") hoặc "GLOBAL"
+  market: Market | (string & {});
   url: string;
   thumbnail_url: string;
   tae_score: number;
@@ -41,7 +62,8 @@ export interface OutlierRecord {
   baseline_vph: number;
   published_hours_ago: number;
   lark_synced: boolean;
-  lark_record_id?: string;
+  lark_record_id?: string | null;
+  analyzed_at?: string;
 
   // Dữ liệu Cột 2: Deep Anatomy (Nevlex Core)
   heatmap_peaks: {
