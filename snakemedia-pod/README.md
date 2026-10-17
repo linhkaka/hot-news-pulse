@@ -85,7 +85,7 @@ cho người hỗ trợ để sửa nhanh. Trang có thể chứa tên tài kho�
 
 ## Đổi logo
 
-Logo nằm ở `snakepod/static/logo.svg` (giao diện) và `packaging/snakepod.ico` (biểu tượng file .exe và bộ cài).
+Logo nằm ở `snakepod/static/logo.png` (giao diện, ảnh vuông PNG) và `packaging/snakepod.ico` (biểu tượng file .exe và bộ cài).
 Thay 2 file này bằng logo của bạn (giữ nguyên tên file) rồi đóng gói lại.
 
 ## Cách 1 (dễ nhất): file cài đặt SnakemediaPOD-Setup.exe

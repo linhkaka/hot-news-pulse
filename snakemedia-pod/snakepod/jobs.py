@@ -1,5 +1,6 @@
 """Hàng đợi việc chạy nền (quét, đào sâu) + nhật ký hiển thị trên giao diện."""
 import collections
+import os
 import queue
 import threading
 import time
@@ -67,7 +68,8 @@ def _worker():
 
 def start_worker():
     threading.Thread(target=_worker, daemon=True).start()
-    threading.Thread(target=_scheduler, daemon=True).start()
+    if os.environ.get("SNAKEPOD_NO_SCHEDULER") != "1":   # bài kiểm thử tắt lịch để không phụ thuộc giờ chạy
+        threading.Thread(target=_scheduler, daemon=True).start()
 
 
 def should_stop():

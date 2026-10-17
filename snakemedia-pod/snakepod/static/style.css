@@ -1,16 +1,16 @@
-/* SNAKEMEDIA POD — màu thương hiệu xanh lục bảo, thanh menu tối, tự đổi sang giao diện tối theo máy */
+/* SNAKEMEDIA POD — màu theo logo: xanh navy, xanh ngọc, xanh chanh; tự đổi sang giao diện tối theo máy */
 :root{
-  --brand:#10b981;--brand-2:#047857;--brand-soft:#d1fae5;--brand-ink:#065f46;
-  --bg:#f3f6f5;--card:#ffffff;--line:#e3e8e6;--text:#14201b;--muted:#64748b;--soft:#f5f8f7;
+  --brand:#0a9a96;--brand-2:#067470;--brand-soft:#d2f7f5;--brand-ink:#04524f;--lime:#b3fa0a;--navy:#041b47;
+  --bg:#f3f6f9;--card:#ffffff;--line:#e2e7ef;--text:#0f1b33;--muted:#64748b;--soft:#f5f7fb;
   --blue:#2563eb;--green:#059669;--red:#dc2626;--amber:#b45309;--purple:#7c3aed;
   --chip:#e8f0fe;--chip-p:#f3e8ff;--chip-r:#fee2e2;--chip-g:#dcfce7;--chip-o:#fff4e0;
-  --side:#0c1f19;--side-2:#12291f;--side-text:#c8dcd3;--side-muted:#6f8f82;--side-on:#1b3a2d;
+  --side:#041b47;--side-2:#071f52;--side-text:#c9d5ec;--side-muted:#7586ab;--side-on:#0f3170;
   --shadow:0 1px 2px rgba(16,24,20,.04),0 4px 16px rgba(16,24,20,.06);
 }
 @media (prefers-color-scheme:dark){:root{
-  --bg:#0b1411;--card:#121d19;--line:#1f2f29;--text:#e6efeb;--muted:#8aa39a;--soft:#17241f;
+  --bg:#08112a;--card:#0f1a38;--line:#1c2a4d;--text:#e6ecf7;--muted:#8e9cbc;--soft:#132041;
   --chip:#172554;--chip-p:#2e1065;--chip-r:#450a0a;--chip-g:#052e1b;--chip-o:#3b2506;
-  --blue:#60a5fa;--green:#34d399;--red:#f87171;--amber:#fbbf24;--purple:#c4b5fd;
+  --brand:#14b8b3;--brand-soft:#0b3a40;--brand-ink:#7ff0ea;--blue:#60a5fa;--green:#34d399;--red:#f87171;--amber:#fbbf24;--purple:#c4b5fd;
   --shadow:0 1px 2px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.25);
 }}
 *{box-sizing:border-box}
@@ -21,9 +21,9 @@ code{background:var(--soft);padding:1px 5px;border-radius:5px;font-size:12px}
 /* ---------- thanh menu ---------- */
 .side{width:240px;background:linear-gradient(180deg,var(--side),var(--side-2));color:var(--side-text);padding:18px 12px;position:sticky;top:0;height:100vh;overflow:auto;flex-shrink:0}
 .brand{display:flex;gap:11px;align-items:center;margin:0 6px 20px}
-.brand img.logo{width:40px;height:40px;border-radius:11px;box-shadow:0 4px 14px rgba(16,185,129,.35)}
+.brand img.logo{width:40px;height:40px;border-radius:11px;box-shadow:0 4px 14px rgba(0,212,207,.30)}
 .brand .name{font-weight:800;letter-spacing:.06em;color:#fff;font-size:15px;line-height:1.1}
-.brand .pod{display:inline-block;margin-left:5px;padding:1px 6px;border-radius:6px;background:var(--brand);color:#fff;font-size:10px;letter-spacing:.08em;vertical-align:2px}
+.brand .pod{display:inline-block;margin-left:5px;padding:1px 6px;border-radius:6px;background:var(--lime);color:var(--navy);font-size:10px;letter-spacing:.08em;vertical-align:2px}
 .brand small{display:block;color:var(--side-muted);font-size:11px;margin-top:3px}
 nav a{display:flex;align-items:center;gap:2px;padding:7px 10px;border-radius:9px;margin:1px 0;color:var(--side-text)}
 nav a:hover{background:rgba(255,255,255,.06);color:#fff}
