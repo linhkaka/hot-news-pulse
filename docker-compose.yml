@@ -1,0 +1,19 @@
+# RICHTUBE - SNAKEMEDIA
+# Hiện mới có Web UI (cổng 3000). Khi có code Backend FastAPI (cổng 8000),
+# bỏ comment khối "richtube-api" bên dưới và trỏ build vào thư mục backend.
+services:
+  richtube-web:
+    build:
+      context: ./richtube-web
+      args:
+        NEXT_PUBLIC_RICHTUBE_API_URL: http://localhost:8000
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+  # richtube-api:
+  #   build: ./richtube-api
+  #   ports:
+  #     - "8000:8000"
+  #   env_file: ./richtube-api/.env
+  #   restart: unless-stopped
