@@ -4,7 +4,7 @@
 # 3. sudo systemctl daemon-reload && sudo systemctl enable --now reels-tracker
 # Xem log: journalctl -u reels-tracker -f
 [Unit]
-Description=Facebook Reels -> Telegram tracker
+Description=Facebook Reels + YouTube -> Telegram tracker
 After=network-online.target
 Wants=network-online.target
 

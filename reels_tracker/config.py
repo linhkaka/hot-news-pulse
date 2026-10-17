@@ -16,6 +16,11 @@ DEFAULTS = {
     # Tried in order; the first metric the API returns a value for is used.
     "view_metrics": ["fb_reels_total_plays", "blue_reels_play_count"],
     "db_path": "reels_tracker.db",
+    "youtube_api_key": "",
+    # Channel IDs (UC...), @handles or channel URLs.
+    "youtube_channels": [],
+    # YouTube's free quota is 10,000 units/day, so poll less often than Facebook.
+    "youtube_poll_interval_seconds": 300,
     # Warn on Telegram when the Facebook token expires within this many days.
     "token_warning_days": 7,
 }
@@ -28,9 +33,25 @@ ENV_OVERRIDES = {
     "VIEW_THRESHOLD": "view_threshold",
     "POLL_INTERVAL_SECONDS": "poll_interval_seconds",
     "DB_PATH": "db_path",
+    "YOUTUBE_API_KEY": "youtube_api_key",
+    "YOUTUBE_POLL_INTERVAL_SECONDS": "youtube_poll_interval_seconds",
 }
 
-INT_KEYS = ("view_threshold", "poll_interval_seconds", "max_reel_age_days", "token_warning_days")
+INT_KEYS = (
+    "view_threshold",
+    "poll_interval_seconds",
+    "max_reel_age_days",
+    "token_warning_days",
+    "youtube_poll_interval_seconds",
+)
+
+
+def facebook_enabled(cfg):
+    return bool(cfg["user_access_token"]) or any(p.get("access_token") for p in cfg["pages"])
+
+
+def _split_list(value):
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def load_dotenv(path):
@@ -59,9 +80,13 @@ def load_config(path):
         if os.environ.get(env):
             cfg[key] = os.environ[env]
     # FB_PAGE_IDS=111,222 adds Pages without editing config.json.
-    for page_id in filter(None, (p.strip() for p in os.environ.get("FB_PAGE_IDS", "").split(","))):
+    for page_id in _split_list(os.environ.get("FB_PAGE_IDS", "")):
         if all(str(p["id"]) != page_id for p in cfg["pages"]):
             cfg["pages"] = [*cfg["pages"], {"id": page_id}]
+    # YT_CHANNELS=@kenh1,UCxxxx adds YouTube channels the same way.
+    for channel in _split_list(os.environ.get("YT_CHANNELS", "")):
+        if channel not in cfg["youtube_channels"]:
+            cfg["youtube_channels"] = [*cfg["youtube_channels"], channel]
 
     for key in INT_KEYS:
         cfg[key] = int(cfg[key])
@@ -69,8 +94,8 @@ def load_config(path):
     missing = [k for k in ("telegram_bot_token", "telegram_chat_id") if not cfg[k]]
     if missing:
         raise ValueError(f"Thiếu cấu hình bắt buộc: {', '.join(missing)}")
-    if not cfg["user_access_token"] and not any(p.get("access_token") for p in cfg["pages"]):
+    if not facebook_enabled(cfg) and not cfg["youtube_api_key"]:
         raise ValueError(
-            "Cần 'user_access_token' (hoặc 'access_token' riêng cho từng Page) để đọc Reels"
+            "Cần ít nhất một nguồn: FB_USER_ACCESS_TOKEN (Facebook) hoặc YOUTUBE_API_KEY (YouTube)"
         )
     return cfg

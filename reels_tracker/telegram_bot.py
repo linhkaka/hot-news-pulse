@@ -13,8 +13,11 @@ COMMANDS = [
     ("add", "Thêm Page: /add <page_id>"),
     ("remove", "Bỏ Page: /remove <page_id>"),
     ("mypages", "Các Page bạn quản lý (có thể /add)"),
+    ("channels", "Kênh YouTube đang theo dõi"),
+    ("addyt", "Thêm kênh YouTube: /addyt @handle"),
+    ("removeyt", "Bỏ kênh YouTube: /removeyt <channel_id>"),
     ("threshold", "Đổi ngưỡng view: /threshold 5000"),
-    ("top", "Top Reels nhiều view nhất"),
+    ("top", "Top Reels/video nhiều view nhất"),
     ("scan", "Quét ngay"),
     ("help", "Hướng dẫn"),
 ]
@@ -55,7 +58,10 @@ class Telegram:
         )
 
 
-HELP_TEXT = "🤖 Reels Tracker — các lệnh:\n" + "\n".join(f"/{c} — {d}" for c, d in COMMANDS)
+HELP_TEXT = "🤖 Reels & YouTube Tracker — các lệnh:\n" + "\n".join(f"/{c} — {d}" for c, d in COMMANDS)
+
+
+YT_DISABLED = "YouTube chưa bật. Thêm YOUTUBE_API_KEY vào file .env rồi chạy lại tool."
 
 
 class CommandBot:
@@ -97,18 +103,46 @@ class CommandBot:
                 f"🗑 Đã bỏ Page {pid}" if t.store.remove_page(pid) else f"Không thấy Page {pid}"
                 for pid in args
             )
+        if command == "channels":
+            if not t.youtube:
+                return YT_DISABLED
+            channels = t.store.active_channels()
+            if not channels:
+                return "Chưa theo dõi kênh YouTube nào. Dùng /addyt @handle."
+            return "▶️ Kênh YouTube đang theo dõi:\n" + "\n".join(
+                f"• {title} ({cid})" for cid, title, _ in channels
+            )
+        if command == "addyt":
+            if not t.youtube:
+                return YT_DISABLED
+            if not args:
+                return "Cách dùng: /addyt @handle  (hoặc ID kênh UC..., hoặc link kênh)"
+            replies = [t.youtube.add_channel(arg) for arg in args]
+            t.scan_requested.set()
+            return "\n".join(replies)
+        if command == "removeyt":
+            if not t.youtube:
+                return YT_DISABLED
+            if not args:
+                return "Cách dùng: /removeyt <channel_id>  (xem ID bằng /channels)"
+            return "\n".join(
+                f"🗑 Đã bỏ kênh {cid}" if t.store.remove_channel(cid) else f"Không thấy kênh {cid}"
+                for cid in args
+            )
         if command == "threshold":
             if not args or not args[0].isdigit() or int(args[0]) <= 0:
                 return f"Ngưỡng hiện tại: {t.threshold():,} view.\nĐổi: /threshold 5000"
             t.store.set_setting("view_threshold", int(args[0]))
             return f"✅ Ngưỡng mới: {int(args[0]):,} view"
         if command == "top":
-            rows = t.store.top_reels(10)
+            rows = [("📘", *r) for r in t.store.top_reels(10)]
+            rows += [("▶️", *r) for r in t.store.top_videos(10)]
+            rows.sort(key=lambda r: r[1], reverse=True)
             if not rows:
                 return "Chưa có dữ liệu. Đợi lần quét đầu tiên nhé."
-            return "🏆 Top Reels:\n" + "\n".join(
-                f"{i}. {views:,} view — {page}\n   {link}"
-                for i, (views, link, page) in enumerate(rows, 1)
+            return "🏆 Top Reels/video:\n" + "\n".join(
+                f"{i}. {icon} {views:,} view — {source}\n   {link}"
+                for i, (icon, views, link, source) in enumerate(rows[:10], 1)
             )
         if command == "scan":
             t.scan_requested.set()
