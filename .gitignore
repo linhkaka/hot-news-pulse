@@ -137,3 +137,12 @@ dist
 # Vite logs files
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
+
+# Reels tracker secrets & state
+reels_tracker/config.json
+reels_tracker/*.db
+__pycache__/
+.pytest_cache/
+reels_tracker/.env
+reels_tracker/data/
+reels_tracker/.venv/
