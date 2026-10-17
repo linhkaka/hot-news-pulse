@@ -2,169 +2,34 @@
 
 Polls the Reels of Facebook Pages you manage, reads their play count from
 the Graph API insights endpoint, and sends the Reel link to a Telegram chat
-the first time a Reel crosses the view threshold.
+the first time a Reel crosses the view threshold. The tracker is also
+controlled from Telegram (/add, /remove, /threshold, /top, /status ...).
 
 Usage:
-    python tracker.py              # run forever, polling every N seconds
-    python tracker.py --once       # run one scan and exit (good for cron)
+    python tracker.py                   # run forever (bot + scanner)
+    python tracker.py --once            # one scan and exit (good for cron)
     python tracker.py --test-telegram   # send a test message and exit
 """
 
 import argparse
-import json
 import logging
-import sqlite3
 import sys
+import threading
 import time
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 import requests
 
+from config import load_config
+from graph import GraphAPIError, GraphClient, RateLimitError, TokenError, parse_fb_time
+from store import Store
+from telegram_bot import CommandBot, Telegram, TelegramError
+
 log = logging.getLogger("reels_tracker")
 
-DEFAULT_CONFIG = {
-    "graph_api_version": "v23.0",
-    "user_access_token": "",
-    "pages": [],
-    "telegram_bot_token": "",
-    "telegram_chat_id": "",
-    "view_threshold": 5000,
-    "poll_interval_seconds": 120,
-    "max_reel_age_days": 7,
-    # Tried in order; the first metric the API returns a value for is used.
-    "view_metrics": ["fb_reels_total_plays", "blue_reels_play_count"],
-    "db_path": "reels_tracker.db",
-}
-
-
-class GraphAPIError(Exception):
-    pass
-
-
-def load_config(path):
-    with open(path, encoding="utf-8") as f:
-        user_cfg = json.load(f)
-    cfg = {**DEFAULT_CONFIG, **user_cfg}
-    missing = [k for k in ("telegram_bot_token", "telegram_chat_id") if not cfg[k]]
-    if missing:
-        raise ValueError(f"Missing required config: {', '.join(missing)}")
-    if not cfg["pages"]:
-        raise ValueError("Config 'pages' is empty: add at least one Page")
-    return cfg
-
-
-class GraphClient:
-    def __init__(self, version, session=None):
-        self.base = f"https://graph.facebook.com/{version}"
-        self.session = session or requests.Session()
-
-    def get(self, path, token, **params):
-        params["access_token"] = token
-        resp = self.session.get(f"{self.base}/{path}", params=params, timeout=30)
-        data = resp.json()
-        if "error" in data:
-            err = data["error"]
-            raise GraphAPIError(f"{err.get('code')}: {err.get('message')}")
-        return data
-
-    def page_tokens_from_user_token(self, user_token):
-        """Map page_id -> page access token for every Page the user manages."""
-        tokens = {}
-        data = self.get("me/accounts", user_token, fields="id,name,access_token", limit=100)
-        while True:
-            for page in data.get("data", []):
-                tokens[page["id"]] = page["access_token"]
-            next_url = data.get("paging", {}).get("next")
-            if not next_url:
-                return tokens
-            data = self.session.get(next_url, timeout=30).json()
-
-    def recent_reels(self, page_id, token, since):
-        """Reels on a Page created after `since` (newest first)."""
-        data = self.get(
-            f"{page_id}/video_reels",
-            token,
-            fields="id,description,permalink_url,created_time",
-            limit=50,
-        )
-        reels = []
-        while True:
-            for reel in data.get("data", []):
-                created = parse_fb_time(reel.get("created_time"))
-                if created and created < since:
-                    return reels
-                reels.append(reel)
-            next_url = data.get("paging", {}).get("next")
-            if not next_url:
-                return reels
-            data = self.session.get(next_url, timeout=30).json()
-
-    def reel_views(self, reel_id, token, metrics):
-        """Return the view count of a Reel, or None if no metric is available."""
-        for metric in metrics:
-            try:
-                data = self.get(f"{reel_id}/video_insights", token, metric=metric)
-            except GraphAPIError as e:
-                log.debug("Metric %s unavailable for %s: %s", metric, reel_id, e)
-                continue
-            for item in data.get("data", []):
-                values = item.get("values") or []
-                if values and isinstance(values[0].get("value"), (int, float)):
-                    return int(values[0]["value"])
-        return None
-
-
-class Telegram:
-    def __init__(self, bot_token, chat_id, session=None):
-        self.url = f"https://api.telegram.org/bot{bot_token}/sendMessage"
-        self.chat_id = chat_id
-        self.session = session or requests.Session()
-
-    def send(self, text):
-        resp = self.session.post(
-            self.url,
-            json={"chat_id": self.chat_id, "text": text, "disable_web_page_preview": False},
-            timeout=30,
-        )
-        data = resp.json()
-        if not data.get("ok"):
-            raise RuntimeError(f"Telegram error: {data.get('description')}")
-
-
-class Store:
-    """Remembers which Reels were already announced, so each is sent once."""
-
-    def __init__(self, path):
-        self.conn = sqlite3.connect(path)
-        self.conn.execute(
-            """CREATE TABLE IF NOT EXISTS notified (
-                reel_id TEXT PRIMARY KEY,
-                page_id TEXT,
-                views INTEGER,
-                link TEXT,
-                notified_at TEXT
-            )"""
-        )
-        self.conn.commit()
-
-    def was_notified(self, reel_id):
-        cur = self.conn.execute("SELECT 1 FROM notified WHERE reel_id = ?", (reel_id,))
-        return cur.fetchone() is not None
-
-    def mark_notified(self, reel_id, page_id, views, link):
-        self.conn.execute(
-            "INSERT OR IGNORE INTO notified VALUES (?, ?, ?, ?, ?)",
-            (reel_id, page_id, views, link, datetime.now(timezone.utc).isoformat()),
-        )
-        self.conn.commit()
-
-
-def parse_fb_time(value):
-    if not value:
-        return None
-    # Graph API returns e.g. "2026-10-17T08:00:00+0000"
-    return datetime.strptime(value, "%Y-%m-%dT%H:%M:%S%z")
+PAGE_TOKEN_REFRESH_SECONDS = 30 * 60
+RATE_LIMIT_COOLDOWN_SECONDS = 15 * 60
+TOKEN_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
 
 
 def reel_link(reel):
@@ -174,7 +39,19 @@ def reel_link(reel):
     return link
 
 
-def format_message(page_name, reel, views, threshold):
+def format_age(created, now):
+    minutes = int((now - created).total_seconds() // 60)
+    hours, minutes = divmod(max(minutes, 0), 60)
+    days, hours = divmod(hours, 24)
+    if days:
+        return f"{days} ngày {hours} giờ"
+    if hours:
+        return f"{hours} giờ {minutes} phút"
+    return f"{minutes} phút"
+
+
+def format_message(page_name, reel, views, threshold, now=None):
+    now = now or datetime.now(timezone.utc)
     caption = (reel.get("description") or "").strip()
     if len(caption) > 120:
         caption = caption[:117] + "..."
@@ -183,64 +60,232 @@ def format_message(page_name, reel, views, threshold):
         f"Page: {page_name}",
         f"Views: {views:,}",
     ]
+    created = parse_fb_time(reel.get("created_time"))
+    if created:
+        lines.append(f"Đăng cách đây: {format_age(created, now)}")
     if caption:
         lines.append(f"Caption: {caption}")
     lines.append(reel_link(reel))
     return "\n".join(lines)
 
 
-def resolve_pages(cfg, graph):
-    """Return a list of (page_id, page_name, page_token)."""
-    user_tokens = {}
-    if cfg["user_access_token"]:
-        user_tokens = graph.page_tokens_from_user_token(cfg["user_access_token"])
-    pages = []
-    for page in cfg["pages"]:
-        page_id = str(page["id"])
-        token = page.get("access_token") or user_tokens.get(page_id)
-        if not token:
-            log.warning(
-                "No access token for Page %s: you must be an admin of it "
-                "(or set 'access_token' for it in the config). Skipping.",
-                page_id,
-            )
-            continue
-        pages.append((page_id, page.get("name") or page_id, token))
-    return pages
+def format_time(ts):
+    return datetime.fromtimestamp(ts, timezone.utc).astimezone().strftime("%H:%M %d/%m/%Y")
 
 
-def scan_once(cfg, graph, telegram, store, pages):
-    since = datetime.now(timezone.utc) - timedelta(days=cfg["max_reel_age_days"])
-    threshold = cfg["view_threshold"]
-    sent = 0
-    for page_id, page_name, token in pages:
+class Tracker:
+    def __init__(self, cfg, graph, telegram, store, clock=time.time):
+        self.cfg = cfg
+        self.graph = graph
+        self.telegram = telegram
+        self.store = store
+        self.clock = clock
+        self.scan_requested = threading.Event()
+        self.last_scan_at = None
+        self.last_scan_result = "chưa quét"
+        self.cooldown_until = 0
+        self.token_expires_at = None
+        self._managed = {}
+        self._managed_at = None
+        self._token_alert_sent = False
+        self._last_token_check = None
+        self._warned_missing = set()
+
+    def threshold(self):
+        return int(self.store.get_setting("view_threshold", self.cfg["view_threshold"]))
+
+    def managed_pages(self, force=False):
+        """page_id -> (name, page token) for Pages the user token manages (cached)."""
+        if not self.cfg["user_access_token"]:
+            return {}
+        stale = (
+            self._managed_at is None
+            or self.clock() - self._managed_at > PAGE_TOKEN_REFRESH_SECONDS
+        )
+        if force or stale:
+            self._managed = self.graph.page_tokens_from_user_token(self.cfg["user_access_token"])
+            self._managed_at = self.clock()
+        return self._managed
+
+    def pages_with_tokens(self):
+        """Active Pages as (page_id, name, token); Pages without a token are skipped."""
+        managed = self.managed_pages()
+        pages = []
+        for page_id, name, own_token in self.store.active_pages():
+            managed_name, managed_token = managed.get(page_id, (None, None))
+            token = own_token or managed_token
+            if not token:
+                if page_id not in self._warned_missing:
+                    log.warning(
+                        "No access token for Page %s: you must be an admin of it "
+                        "(or set 'access_token' for it in the config). Skipping.",
+                        page_id,
+                    )
+                    self._warned_missing.add(page_id)
+                continue
+            if not name and managed_name:
+                name = managed_name
+                self.store.set_page_name(page_id, name)
+            pages.append((page_id, name or page_id, token))
+        return pages
+
+    def add_page(self, page_id):
+        if not page_id.isdigit():
+            return f"❌ '{page_id}' không phải Page ID (Page ID là một dãy số)."
         try:
-            reels = graph.recent_reels(page_id, token, since)
-        except (GraphAPIError, requests.RequestException) as e:
-            log.error("Could not list Reels for %s: %s", page_name, e)
-            continue
-        log.info("%s: %d recent Reels", page_name, len(reels))
-        for reel in reels:
-            if store.was_notified(reel["id"]):
-                continue
+            managed = self.managed_pages(force=True)
+        except GraphAPIError as e:
+            return f"❌ Lỗi Facebook API: {e}"
+        if page_id not in managed:
+            return (
+                f"❌ Không đọc được Page {page_id}. Chỉ thêm được Page bạn quản lý "
+                "và token có quyền — xem danh sách bằng /mypages."
+            )
+        name = managed[page_id][0]
+        self.store.add_page(page_id, name)
+        self._warned_missing.discard(page_id)
+        self.scan_requested.set()
+        return f"✅ Đã thêm {name} ({page_id})"
+
+    def my_pages_text(self):
+        try:
+            managed = self.managed_pages(force=True)
+        except GraphAPIError as e:
+            return f"❌ Lỗi Facebook API: {e}"
+        if not managed:
+            return "Token hiện tại không quản lý Page nào."
+        tracked = {pid for pid, _, _ in self.store.active_pages()}
+        lines = ["📄 Page bạn quản lý (✅ = đang theo dõi):"]
+        for page_id, (name, _) in sorted(managed.items(), key=lambda kv: kv[1][0]):
+            mark = "✅" if page_id in tracked else "➕"
+            lines.append(f"{mark} {name} — {page_id}")
+        lines.append("\nThêm Page: /add <page_id>")
+        return "\n".join(lines)
+
+    def status_text(self):
+        lines = [
+            "📊 Trạng thái Reels Tracker",
+            f"Page đang theo dõi: {len(self.store.active_pages())}",
+            f"Ngưỡng: {self.threshold():,} view",
+            f"Quét mỗi: {self.cfg['poll_interval_seconds']} giây",
+            f"Reels mới trong: {self.cfg['max_reel_age_days']} ngày",
+            f"Đã gửi thông báo: {self.store.notified_count()} Reel",
+        ]
+        if self.last_scan_at:
+            lines.append(f"Lần quét gần nhất: {format_time(self.last_scan_at)} ({self.last_scan_result})")
+        else:
+            lines.append(f"Lần quét gần nhất: {self.last_scan_result}")
+        if self.cooldown_until > self.clock():
+            lines.append(f"⏸ Tạm dừng do giới hạn API đến {format_time(self.cooldown_until)}")
+        if self.token_expires_at == 0:
+            lines.append("Token Facebook: không hết hạn")
+        elif self.token_expires_at:
+            lines.append(f"Token Facebook hết hạn: {format_time(self.token_expires_at)}")
+        return "\n".join(lines)
+
+    def _send_token_alert(self, text):
+        if self._token_alert_sent:
+            return
+        self._token_alert_sent = True
+        log.error(text)
+        try:
+            self.telegram.send(text)
+        except (TelegramError, requests.RequestException) as e:
+            log.warning("Could not send token alert: %s", e)
+
+    def check_token_expiry(self):
+        token = self.cfg["user_access_token"]
+        now = self.clock()
+        if not token or (
+            self._last_token_check is not None
+            and now - self._last_token_check < TOKEN_CHECK_INTERVAL_SECONDS
+        ):
+            return
+        self._last_token_check = now
+        try:
+            expires_at = self.graph.token_expires_at(token)
+        except TokenError as e:
+            self._send_token_alert(f"⚠️ Token Facebook không còn hợp lệ ({e}). Hãy lấy token mới.")
+            return
+        self.token_expires_at = expires_at
+        if expires_at and expires_at - now < self.cfg["token_warning_days"] * 86400:
+            days_left = max(0, int((expires_at - now) // 86400))
             try:
-                views = graph.reel_views(reel["id"], token, cfg["view_metrics"])
-            except requests.RequestException as e:
-                log.error("Could not read views for Reel %s: %s", reel["id"], e)
-                continue
-            if views is None:
-                log.debug("No view metric for Reel %s", reel["id"])
-                continue
-            if views >= threshold:
+                self.telegram.send(
+                    f"⏰ Token Facebook sẽ hết hạn sau {days_left} ngày "
+                    f"({format_time(expires_at)}). Hãy lấy token mới (README Bước 2)."
+                )
+            except (TelegramError, requests.RequestException) as e:
+                log.warning("Could not send expiry warning: %s", e)
+
+    def scan_once(self):
+        now = datetime.now(timezone.utc)
+        since = now - timedelta(days=self.cfg["max_reel_age_days"])
+        threshold = self.threshold()
+        sent = checked = 0
+        try:
+            pages = self.pages_with_tokens()
+            for page_id, page_name, token in pages:
                 try:
-                    telegram.send(format_message(page_name, reel, views, threshold))
-                except (RuntimeError, requests.RequestException) as e:
-                    log.error("Telegram send failed for Reel %s: %s", reel["id"], e)
+                    reels = self.graph.recent_reels(page_id, token, since)
+                except (RateLimitError, TokenError):
+                    raise
+                except GraphAPIError as e:
+                    log.error("Could not list Reels for %s: %s", page_name, e)
                     continue
-                store.mark_notified(reel["id"], page_id, views, reel_link(reel))
-                sent += 1
-                log.info("Notified Reel %s (%d views)", reel["id"], views)
-    return sent
+                log.info("%s: %d recent Reels", page_name, len(reels))
+                for reel in reels:
+                    if self.store.was_notified(reel["id"]):
+                        continue
+                    views = self.graph.reel_views(reel["id"], token, self.cfg["view_metrics"])
+                    checked += 1
+                    if views is None:
+                        log.debug("No view metric for Reel %s", reel["id"])
+                        continue
+                    link = reel_link(reel)
+                    self.store.save_reel(reel["id"], page_id, link, reel.get("description"), views)
+                    if views < threshold:
+                        continue
+                    try:
+                        self.telegram.send(format_message(page_name, reel, views, threshold, now))
+                    except (TelegramError, requests.RequestException) as e:
+                        log.error("Telegram send failed for Reel %s: %s", reel["id"], e)
+                        continue
+                    self.store.mark_notified(reel["id"], page_id, views, link)
+                    sent += 1
+                    log.info("Notified Reel %s (%d views)", reel["id"], views)
+        except RateLimitError as e:
+            self.cooldown_until = self.clock() + RATE_LIMIT_COOLDOWN_SECONDS
+            self.last_scan_result = "bị Facebook giới hạn tốc độ, tạm nghỉ 15 phút"
+            log.warning("Rate limited by Graph API (%s); pausing scans", e)
+            return sent
+        except TokenError as e:
+            self.last_scan_result = "lỗi token Facebook"
+            self._send_token_alert(
+                f"⚠️ Token Facebook không hợp lệ hoặc đã hết hạn ({e}).\n"
+                "Hãy lấy token mới (README Bước 2) rồi khởi động lại tool."
+            )
+            return sent
+        except GraphAPIError as e:
+            self.last_scan_result = f"lỗi: {e}"
+            log.error("Scan failed: %s", e)
+            return sent
+
+        self._token_alert_sent = False
+        self.last_scan_at = self.clock()
+        self.last_scan_result = f"{len(pages)} Page, {checked} Reel, gửi {sent} thông báo"
+        log.info("Scan done: %s", self.last_scan_result)
+        return sent
+
+    def run(self, stop_event, once=False):
+        while not stop_event.is_set():
+            if self.clock() >= self.cooldown_until:
+                self.check_token_expiry()
+                self.scan_once()
+            if once:
+                return
+            self.scan_requested.wait(self.cfg["poll_interval_seconds"])
+            self.scan_requested.clear()
 
 
 def main(argv=None):
@@ -248,6 +293,7 @@ def main(argv=None):
     parser.add_argument("--config", default="config.json")
     parser.add_argument("--once", action="store_true", help="Run one scan and exit")
     parser.add_argument("--test-telegram", action="store_true", help="Send a test message")
+    parser.add_argument("--no-bot", action="store_true", help="Don't answer Telegram commands")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -256,25 +302,56 @@ def main(argv=None):
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
-    cfg = load_config(args.config)
+    try:
+        cfg = load_config(args.config)
+    except (ValueError, OSError) as e:
+        log.error("Lỗi cấu hình: %s", e)
+        return 2
+
     telegram = Telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"])
     if args.test_telegram:
-        telegram.send("✅ Reels tracker: kết nối Telegram thành công!")
+        try:
+            telegram.send("✅ Reels tracker: kết nối Telegram thành công!")
+        except (TelegramError, requests.RequestException) as e:
+            log.error("Không gửi được tin Telegram: %s", e)
+            return 1
         log.info("Test message sent")
         return 0
 
     graph = GraphClient(cfg["graph_api_version"])
-    store = Store(Path(cfg["db_path"]))
-    pages = resolve_pages(cfg, graph)
-    if not pages:
-        log.error("No Pages with a usable access token. Nothing to do.")
-        return 1
+    store = Store(cfg["db_path"])
+    store.seed_pages(cfg["pages"])
+    tracker = Tracker(cfg, graph, telegram, store)
+    stop = threading.Event()
 
-    while True:
-        scan_once(cfg, graph, telegram, store, pages)
-        if args.once:
-            return 0
-        time.sleep(cfg["poll_interval_seconds"])
+    if args.once:
+        tracker.run(stop, once=True)
+        return 0
+
+    if not args.no_bot:
+        try:
+            telegram.set_commands()
+        except (TelegramError, requests.RequestException) as e:
+            log.warning("Could not register bot commands: %s", e)
+        threading.Thread(target=CommandBot(telegram, tracker).run, args=(stop,), daemon=True).start()
+
+    page_count = len(store.active_pages())
+    hint = "" if page_count else "\nChưa có Page nào — gõ /mypages rồi /add <page_id>."
+    try:
+        telegram.send(
+            f"🚀 Reels Tracker đã chạy: {page_count} Page, ngưỡng {tracker.threshold():,} view."
+            f"{hint}\nGõ /help để xem lệnh."
+        )
+    except (TelegramError, requests.RequestException) as e:
+        log.warning("Could not send startup message: %s", e)
+
+    try:
+        tracker.run(stop)
+    except KeyboardInterrupt:
+        log.info("Stopped")
+    finally:
+        stop.set()
+    return 0
 
 
 if __name__ == "__main__":

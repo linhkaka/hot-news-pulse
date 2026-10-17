@@ -143,3 +143,6 @@ reels_tracker/config.json
 reels_tracker/*.db
 __pycache__/
 .pytest_cache/
+reels_tracker/.env
+reels_tracker/data/
+reels_tracker/.venv/

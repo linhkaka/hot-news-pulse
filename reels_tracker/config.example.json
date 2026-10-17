@@ -1,13 +1,11 @@
 {
-  "graph_api_version": "v23.0",
-  "user_access_token": "DAN_USER_ACCESS_TOKEN_DAI_HAN_VAO_DAY",
   "pages": [
     { "id": "123456789012345", "name": "Page A" },
-    { "id": "987654321098765", "name": "Page B", "access_token": "PAGE_TOKEN_RIENG_NEU_CO" }
+    { "id": "987654321098765", "name": "Page B" }
   ],
-  "telegram_bot_token": "123456:ABC-TOKEN-TU-BOTFATHER",
-  "telegram_chat_id": "123456789",
   "view_threshold": 5000,
   "poll_interval_seconds": 120,
-  "max_reel_age_days": 7
+  "max_reel_age_days": 7,
+  "token_warning_days": 7,
+  "graph_api_version": "v23.0"
 }
