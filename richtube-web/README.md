@@ -1,0 +1,40 @@
+# RICHTUBE Studio Dashboard (SNAKEMEDIA)
+
+Giao diện Command Center 3 cột: **Outlier Radar → Giải mã cấu trúc → Kịch bản sản xuất 4 cột**.
+Next.js 14 (App Router) + Tailwind CSS + Lucide Icons.
+
+## Chạy thử trên máy (cần Node.js 20+)
+
+```bash
+cd richtube-web
+npm install
+npm run dev
+```
+
+Mở trình duyệt: http://localhost:3000
+
+## Kết nối Backend
+
+Copy `.env.example` thành `.env.local` và sửa địa chỉ FastAPI nếu cần:
+
+```
+NEXT_PUBLIC_RICHTUBE_API_URL=http://localhost:8000
+```
+
+Nếu Backend chưa chạy, góc trên bên phải hiện **Engine: Offline (Demo)** và dashboard hiển thị dữ liệu mẫu.
+Khi Engine đã có kết quả, Dashboard tự tải danh sách thật. Sau khi bấm Spy/Tìm Kênh, Dashboard theo dõi tiến độ và tự cập nhật khi xong.
+
+API mà giao diện gọi:
+
+| Nút | Endpoint |
+|---|---|
+| Spy Video | `POST /api/v1/spy/video` `{ video_url, notify_telegram }` |
+| Tìm Kênh Đa Quốc Gia | `POST /api/v1/discover/channel` `{ seed_channel_url, target_markets }` |
+| Đèn trạng thái Engine | `GET /health` |
+| Danh sách Outlier | `GET /api/v1/outliers` |
+| Theo dõi tiến độ | `GET /api/v1/jobs/{job_id}` |
+
+## Chạy cả hệ thống 24/7 bằng Docker
+
+Backend nằm trong [`../richtube-engine`](../richtube-engine) (đã bật sẵn CORS cho cổng 3000).
+Xem hướng dẫn đầy đủ ở [README gốc](../README.md).
