@@ -83,6 +83,7 @@ Tài liệu API tự động: http://localhost:8000/docs
 | POST | `/api/v1/watchlist` | `{ "channel_url": "..." }` thêm kênh |
 | DELETE | `/api/v1/watchlist/{channel_id}` | Bỏ theo dõi |
 | POST | `/api/v1/radar/run` | Quét Radar ngay → job |
+| POST | `/api/v1/outliers/import` | Nhận kết quả đã phân tích từ Tiện ích Chrome → lưu, đồng bộ Lark, báo Telegram |
 
 Nếu đặt `RICHTUBE_API_KEY`, các lệnh POST/DELETE phải gửi kèm header `X-API-Key` (Web và Bot tự gửi).
 

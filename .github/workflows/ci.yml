@@ -39,6 +39,27 @@ jobs:
       - run: npm run lint
       - run: npm run build
 
+  chrome:
+    name: Chrome extension (test + zip)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm test
+        working-directory: richtube-chrome
+      - name: Đóng gói tiện ích
+        run: |
+          mkdir -p dist/richtube-chrome
+          cd richtube-chrome
+          cp -r manifest.json background.js content.js content.css sidepanel.html sidepanel.js \
+            options.html options.js panel.css README.md lib icons ../dist/richtube-chrome/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: richtube-chrome
+          path: dist/
+
   docker:
     name: Docker images
     runs-on: ubuntu-latest

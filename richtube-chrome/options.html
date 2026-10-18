@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RICHTUBE Spy · Cài đặt</title>
+  <link rel="stylesheet" href="panel.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="logo">📡</div>
+    <div>
+      <div class="brand">RICHTUBE SPY · CÀI ĐẶT</div>
+      <div class="sub">Key chỉ lưu trên máy bạn (chrome.storage.local)</div>
+    </div>
+  </header>
+
+  <form id="form" class="form">
+    <section class="card">
+      <h3 class="green">1. Gemini (bắt buộc)</h3>
+      <div class="field">
+        <label for="geminiKeys">Gemini API key</label>
+        <textarea id="geminiKeys" placeholder="AIza...&#10;AIza... (mỗi key 1 dòng, hệ thống tự xoay vòng khi hết quota)"></textarea>
+        <div class="hint">Lấy miễn phí tại <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a></div>
+      </div>
+      <div class="field">
+        <label for="geminiModel">Model</label>
+        <input id="geminiModel" type="text" />
+      </div>
+      <div class="field check">
+        <input id="watchVideo" type="checkbox" />
+        <label for="watchVideo" style="margin:0">Cho Gemini "xem" trực tiếp 2 phút đầu video (phân tích Hook chính xác hơn, tốn token hơn)</label>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3 class="cyan">2. YouTube Data API (khuyên dùng)</h3>
+      <div class="field">
+        <label for="youtubeApiKey">YouTube API key</label>
+        <input id="youtubeApiKey" type="password" placeholder="AIza..." />
+        <div class="hint">Cần để tính điểm TAE (so với các video khác của kênh) và đọc top bình luận.
+          Google Cloud Console → bật <b>YouTube Data API v3</b> → Credentials → API key.</div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3 class="amber">3. Ngôn ngữ đầu ra</h3>
+      <div class="field"><label for="titleLanguage">Ngôn ngữ tiêu đề đề xuất</label><input id="titleLanguage" type="text" /></div>
+      <div class="field"><label for="scriptLanguage">Ngôn ngữ lời thoại kịch bản</label><input id="scriptLanguage" type="text" /></div>
+    </section>
+
+    <section class="card">
+      <h3 class="purple">4. Kết nối RICHTUBE Engine (tuỳ chọn)</h3>
+      <div class="field">
+        <label for="engineUrl">Địa chỉ Engine</label>
+        <input id="engineUrl" type="url" placeholder="http://localhost:8000" />
+        <div class="hint">Nếu có, kết quả sẽ được gửi về Engine để đồng bộ Lark Base, báo Telegram và hiện trên Dashboard.</div>
+      </div>
+      <div class="field">
+        <label for="engineApiKey">RICHTUBE_API_KEY của Engine (nếu có đặt)</label>
+        <input id="engineApiKey" type="password" />
+      </div>
+      <div class="field check">
+        <input id="autoPush" type="checkbox" />
+        <label for="autoPush" style="margin:0">Tự gửi về Engine sau mỗi lần Spy</label>
+      </div>
+    </section>
+
+    <div class="row">
+      <button class="btn primary" type="submit">💾 Lưu cài đặt</button>
+      <span id="saved" class="green small"></span>
+    </div>
+  </form>
+
+  <script type="module" src="options.js"></script>
+</body>
+</html>

@@ -158,3 +158,13 @@ def test_watchlist_and_radar_endpoints(make_client):
             assert client.get("/api/v1/watchlist").json() == []
     finally:
         Engine.watch = original
+
+
+def test_import_endpoint_requires_key_and_saves(make_client):
+    with make_client(RICHTUBE_API_KEY="k") as client:
+        body = _record("abcdefghijk").model_dump()
+        assert client.post("/api/v1/outliers/import", json=body).status_code == 401
+        res = client.post("/api/v1/outliers/import?notify_telegram=false", json=body, headers={"X-API-Key": "k"})
+        assert res.status_code == 200 and res.json()["video_id"] == "abcdefghijk"
+        assert client.get("/api/v1/outliers/abcdefghijk").status_code == 200
+        assert client.post("/api/v1/outliers/import", json={"video_id": "x"}, headers={"X-API-Key": "k"}).status_code == 422

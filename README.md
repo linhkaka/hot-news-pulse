@@ -6,7 +6,8 @@ Hệ thống do thám YouTube đa thị trường và sản xuất kịch bản 
 .
 ├── docker-compose.yml   # Chạy cả 3 service 24/7
 ├── richtube-engine/     # Backend FastAPI (cổng 8000) + Telegram Bot
-└── richtube-web/        # Web Dashboard Next.js (cổng 3000)
+├── richtube-web/        # Web Dashboard Next.js (cổng 3000)
+└── richtube-chrome/     # Tiện ích Chrome: nút 🔥 Spy ngay trên YouTube
 ```
 
 ## Khởi động nhanh (cần Docker)
@@ -38,4 +39,9 @@ RICHTUBE_PUBLIC_API_URL=http://<IP-VPS>:8000
 và trong `richtube-engine/.env` thêm `CORS_ORIGINS=http://<IP-VPS>:3000` và `RICHTUBE_API_KEY=<chuỗi bí mật>`.
 Nếu đặt `RICHTUBE_API_KEY`, ghi cùng giá trị đó vào file `.env` ở thư mục gốc để Web gửi kèm key.
 
-Chi tiết từng phần: [richtube-engine/README.md](richtube-engine/README.md) · [richtube-web/README.md](richtube-web/README.md)
+## Chỉ muốn dùng nhanh? Cài Tiện ích Chrome
+
+Không cần Docker hay server: cài thư mục `richtube-chrome` vào Chrome, nhập Gemini key là dùng được.
+Xem hướng dẫn tại [richtube-chrome/README.md](richtube-chrome/README.md).
+
+Chi tiết từng phần: [richtube-engine/README.md](richtube-engine/README.md) · [richtube-web/README.md](richtube-web/README.md) · [richtube-chrome/README.md](richtube-chrome/README.md)

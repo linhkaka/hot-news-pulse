@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="vi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RICHTUBE Spy</title>
+  <link rel="stylesheet" href="panel.css" />
+</head>
+<body>
+  <header class="top">
+    <div class="logo">📡</div>
+    <div>
+      <div class="brand">RICHTUBE SPY</div>
+      <div class="sub">SNAKEMEDIA CO., LTD.</div>
+    </div>
+    <div class="spacer"></div>
+    <button id="open-options" class="icon-btn" title="Cài đặt">⚙️ Cài đặt</button>
+  </header>
+
+  <main>
+    <!-- Video đang mở trên tab hiện tại -->
+    <section class="card" id="current">
+      <div id="current-info" class="muted small">Mở một video YouTube để bắt đầu.</div>
+      <div style="margin-top:10px">
+        <button id="spy-btn" class="btn primary block" disabled>🔥 Spy video này</button>
+      </div>
+      <div id="setup-hint" class="status error small" style="margin-top:8px" hidden></div>
+    </section>
+
+    <div id="status" class="status" hidden></div>
+
+    <!-- Kết quả phân tích -->
+    <section id="result" hidden></section>
+
+    <!-- Lịch sử -->
+    <section class="card">
+      <h3 class="muted">🕘 Lịch sử phân tích</h3>
+      <div id="history"></div>
+    </section>
+  </main>
+
+  <script type="module" src="sidepanel.js"></script>
+</body>
+</html>

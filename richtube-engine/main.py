@@ -200,6 +200,12 @@ def record_or_404(engine: Engine, video_id: str) -> OutlierRecord:
     return record
 
 
+@app.post("/api/v1/outliers/import", response_model=OutlierRecord, dependencies=[Depends(require_api_key)])
+async def import_outlier(request: Request, record: OutlierRecord, notify_telegram: bool = True):
+    """Nhận kết quả phân tích từ Tiện ích Chrome (đã tự lấy Heatmap/transcript trên trình duyệt)."""
+    return await engine_of(request).import_record(record, notify=notify_telegram)
+
+
 @app.delete("/api/v1/outliers/{video_id}", status_code=204, dependencies=[Depends(require_api_key)])
 async def delete_outlier(request: Request, video_id: str):
     if not await engine_of(request).store.delete(video_id):

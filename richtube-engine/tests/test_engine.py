@@ -240,3 +240,22 @@ async def test_radar_rejects_concurrent_scan(settings, mocked):
         async with engine.radar_lock:
             with pytest.raises(RuntimeError):
                 await engine.radar_scan()
+
+
+async def test_import_record_from_extension(settings, mocked):
+    from richtube.models import OutlierRecord
+
+    record = OutlierRecord.model_validate({
+        "video_id": VID, "title": "From Chrome", "channel_name": "c", "market": "US",
+        "url": f"https://www.youtube.com/watch?v={VID}", "thumbnail_url": "", "tae_score": 4.2,
+        "current_vph": 100, "baseline_vph": 24, "published_hours_ago": 3, "lark_synced": True,
+        "heatmap_curve": [0.5, 1.0], "heatmap_peaks": {}, **sample_analysis(),
+    })
+    async with httpx.AsyncClient() as http:
+        engine = Engine(settings, http)
+        saved = await engine.import_record(record, chat_id="444")
+    # lark_synced do client gửi lên không được tin; Engine tự đồng bộ thật
+    assert saved.lark_synced and saved.lark_record_id == "rec_001"
+    assert engine.store.get(VID).title == "From Chrome"
+    texts = [json.loads(c.request.content)["text"] for c in mocked.calls if "api.telegram.org" in str(c.request.url)]
+    assert any("From Chrome" in t for t in texts)

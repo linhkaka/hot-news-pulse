@@ -127,7 +127,18 @@ class Engine:
             deconstruction=result.deconstruction,
             blueprint=result.blueprint,
         )
+        return await self._finalize(record, notify, chat_id)
 
+    async def import_record(
+        self, record: OutlierRecord, notify: bool = True, chat_id: Optional[str] = None
+    ) -> OutlierRecord:
+        """Nhận kết quả đã phân tích sẵn (vd: từ Tiện ích Chrome) rồi lưu, đồng bộ Lark, báo Telegram."""
+        previous = self.store.get(record.video_id)
+        record.lark_record_id = record.lark_record_id or (previous.lark_record_id if previous else None)
+        record.lark_synced = False
+        return await self._finalize(record, notify, chat_id)
+
+    async def _finalize(self, record: OutlierRecord, notify: bool, chat_id: Optional[str]) -> OutlierRecord:
         if self.lark.configured:
             try:
                 await self._push_lark(record)
