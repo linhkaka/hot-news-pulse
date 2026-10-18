@@ -13,11 +13,22 @@ export interface EngineHealth {
   lark_configured: boolean;
   telegram_configured: boolean;
   records: number;
+  watchlist: number;
+  radar_interval_hours: number;
+}
+
+export interface WatchChannel {
+  channel_id: string;
+  title: string;
+  market: string;
+  thumbnail_url: string;
+  added_at: string;
+  last_scanned_at?: string | null;
 }
 
 export interface Job {
   job_id: string;
-  kind: "spy" | "discover";
+  kind: "spy" | "discover" | "radar";
   status: "queued" | "running" | "done" | "failed";
   input: string;
   created_at: string;
@@ -64,6 +75,9 @@ export interface OutlierRecord {
   lark_synced: boolean;
   lark_record_id?: string | null;
   analyzed_at?: string;
+  duration_seconds?: number;
+  // Đường cong Most Replayed của cả video (0..1, các điểm cách đều nhau)
+  heatmap_curve?: number[];
 
   // Dữ liệu Cột 2: Deep Anatomy (Nevlex Core)
   heatmap_peaks: {

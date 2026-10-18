@@ -94,6 +94,9 @@ class OutlierRecord(BaseModel):
     lark_synced: bool = False
     lark_record_id: Optional[str] = None
     analyzed_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    duration_seconds: int = 0
+    # Đường cong Most Replayed của cả video (~100 điểm, 0..1, cách đều nhau)
+    heatmap_curve: list[float] = []
 
     heatmap_peaks: HeatmapPeaks
     deconstruction: Deconstruction
@@ -115,9 +118,22 @@ class DiscoverRequest(BaseModel):
     telegram_chat_id: Optional[str] = None
 
 
+class WatchRequest(BaseModel):
+    channel_url: str
+
+
+class WatchChannel(BaseModel):
+    channel_id: str
+    title: str
+    market: str
+    thumbnail_url: str = ""
+    added_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())
+    last_scanned_at: Optional[str] = None
+
+
 class Job(BaseModel):
     job_id: str
-    kind: Literal["spy", "discover"]
+    kind: Literal["spy", "discover", "radar"]
     status: Literal["queued", "running", "done", "failed"] = "queued"
     input: str
     created_at: str = Field(default_factory=lambda: datetime.now(timezone.utc).isoformat())

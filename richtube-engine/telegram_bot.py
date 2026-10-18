@@ -6,6 +6,10 @@
 # Lệnh:
 #   /spy <link video>        Mổ xẻ 1 video outlier
 #   /discover <link kênh>    Tìm đối thủ đa quốc gia (US, JP, KR, ES, DE, FR)
+#   /watch <link kênh>       Thêm kênh vào Radar theo dõi 24/7
+#   /unwatch <số thứ tự>     Bỏ theo dõi (xem số ở /watchlist)
+#   /watchlist               Danh sách kênh đang theo dõi
+#   /radar                   Quét Radar ngay
 #   /top                     5 video TAE cao nhất đã phân tích
 #   /status                  Trạng thái Engine
 #   /id                      Xem Chat ID của bạn
@@ -20,6 +24,7 @@ import httpx
 
 from richtube.config import get_settings
 from richtube.models import MARKETS
+from richtube.telegram import esc
 from richtube.youtube import parse_video_id
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -33,6 +38,9 @@ HELP = (
     "🐍 <b>RICHTUBE OS · SNAKEMEDIA</b>\n\n"
     "/spy &lt;link video&gt; — mổ xẻ video outlier\n"
     "/discover &lt;link kênh&gt; — tìm đối thủ đa quốc gia\n"
+    "/watch &lt;link kênh&gt; — thêm kênh vào Radar 24/7\n"
+    "/watchlist — kênh đang theo dõi · /unwatch &lt;số&gt; — bỏ theo dõi\n"
+    "/radar — quét Radar ngay\n"
     "/top — 5 video TAE cao nhất\n"
     "/status — trạng thái Engine\n"
     "/id — xem Chat ID\n\n"
@@ -101,7 +109,7 @@ async def handle(http: httpx.AsyncClient, message: dict) -> None:
             if res.status_code == 202:
                 await reply(http, chat_id, "🔬 Đã nhận lệnh. Đang mổ xẻ video (1-3 phút)...")
             else:
-                await reply(http, chat_id, f"⚠️ Lỗi: {error_detail(res)}")
+                await reply(http, chat_id, f"⚠️ Lỗi: {esc(error_detail(res))}")
 
         elif command == "/discover":
             if not arg:
@@ -114,7 +122,44 @@ async def handle(http: httpx.AsyncClient, message: dict) -> None:
             if res.status_code == 202:
                 await reply(http, chat_id, "🌐 Đang truy vết kênh tương tự ở 6 thị trường (3-10 phút)...")
             else:
-                await reply(http, chat_id, f"⚠️ Lỗi: {error_detail(res)}")
+                await reply(http, chat_id, f"⚠️ Lỗi: {esc(error_detail(res))}")
+
+        elif command == "/watch":
+            if not arg:
+                await reply(http, chat_id, "Cú pháp: /watch https://www.youtube.com/@tenkenh")
+                return
+            res = await call_engine(http, "POST", "/api/v1/watchlist", json={"channel_url": arg})
+            if res.status_code == 201:
+                ch = res.json()
+                await reply(http, chat_id, f"📡 Đã thêm <b>{esc(ch['title'])}</b> [{ch['market']}] vào Radar.")
+            else:
+                await reply(http, chat_id, f"⚠️ Lỗi: {esc(error_detail(res))}")
+
+        elif command in ("/watchlist", "/unwatch"):
+            channels = (await call_engine(http, "GET", "/api/v1/watchlist")).json()
+            if command == "/unwatch":
+                if not arg.isdigit() or not 1 <= int(arg) <= len(channels):
+                    await reply(http, chat_id, "Cú pháp: /unwatch &lt;số thứ tự trong /watchlist&gt;")
+                    return
+                ch = channels[int(arg) - 1]
+                res = await call_engine(http, "DELETE", f"/api/v1/watchlist/{ch['channel_id']}")
+                msg = f"🗑️ Đã bỏ theo dõi <b>{esc(ch['title'])}</b>." if res.status_code == 204 else f"⚠️ Lỗi: {esc(error_detail(res))}"
+                await reply(http, chat_id, msg)
+                return
+            if not channels:
+                await reply(http, chat_id, "Chưa theo dõi kênh nào. Dùng /watch &lt;link kênh&gt;.")
+                return
+            lines = [f"{i+1}. [{c['market']}] <b>{esc(c['title'])}</b>" for i, c in enumerate(channels)]
+            await reply(http, chat_id, "📡 <b>Kênh đang theo dõi</b>\n\n" + "\n".join(lines))
+
+        elif command == "/radar":
+            res = await call_engine(
+                http, "POST", "/api/v1/radar/run", params={"telegram_chat_id": str(chat_id)},
+            )
+            if res.status_code == 202:
+                await reply(http, chat_id, "📡 Radar đang quét các kênh theo dõi...")
+            else:
+                await reply(http, chat_id, f"⚠️ {esc(error_detail(res))}")
 
         elif command == "/top":
             res = await call_engine(http, "GET", "/api/v1/outliers")
@@ -122,7 +167,7 @@ async def handle(http: httpx.AsyncClient, message: dict) -> None:
             if not records:
                 await reply(http, chat_id, "Chưa có video nào được phân tích.")
                 return
-            lines = [f"{i+1}. [{r['market']}] <b>{r['tae_score']}x</b> — {r['title']}\n{r['url']}" for i, r in enumerate(records)]
+            lines = [f"{i+1}. [{r['market']}] <b>{r['tae_score']}x</b> — {esc(r['title'])}\n{r['url']}" for i, r in enumerate(records)]
             await reply(http, chat_id, "🔥 <b>Top Outlier</b>\n\n" + "\n\n".join(lines))
 
         elif command == "/status":
@@ -131,7 +176,7 @@ async def handle(http: httpx.AsyncClient, message: dict) -> None:
                 http, chat_id,
                 f"🟢 Engine: {h['status']}\nGemini keys: {h['gemini_pool_size']}\n"
                 f"YouTube: {'✅' if h['youtube_configured'] else '❌'} · Lark: {'✅' if h['lark_configured'] else '❌'}\n"
-                f"Đã phân tích: {h['records']} video",
+                f"Đã phân tích: {h['records']} video · Theo dõi: {h['watchlist']} kênh",
             )
         else:
             await reply(http, chat_id, HELP)

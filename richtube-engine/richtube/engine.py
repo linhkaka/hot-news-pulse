@@ -15,9 +15,9 @@ from .analyzer import analyze, build_prompt
 from .config import Settings
 from .gemini import GeminiPool
 from .lark import LarkClient
-from .models import MARKETS, HeatmapPeaks, OutlierRecord
-from .signals import fetch_heatmap, fetch_transcript, summarize_heatmap
-from .store import OutlierStore
+from .models import MARKETS, HeatmapPeaks, OutlierRecord, WatchChannel
+from .signals import fetch_heatmap, fetch_transcript, heatmap_curve, summarize_heatmap
+from .store import OutlierStore, WatchlistStore
 from .telegram import TelegramNotifier, esc, format_record
 from .youtube import (
     YouTubeClient,
@@ -26,6 +26,7 @@ from .youtube import (
     best_thumbnail,
     hours_since,
     parse_channel_ref,
+    parse_duration,
     parse_video_id,
     video_vph,
 )
@@ -33,6 +34,11 @@ from .youtube import (
 log = logging.getLogger("richtube.engine")
 
 MARKET_LANGUAGE = {"US": "en", "JP": "ja", "KR": "ko", "ES": "es", "DE": "de", "FR": "fr"}
+
+
+def market_of(channel: dict) -> str:
+    country = channel["snippet"].get("country", "")
+    return country if country in MARKETS else (country or "GLOBAL")
 
 
 class Engine:
@@ -47,6 +53,8 @@ class Engine:
         )
         self.telegram = TelegramNotifier(settings.telegram_bot_token, settings.telegram_chat_id, http)
         self.store = OutlierStore(settings.data_dir)
+        self.watchlist = WatchlistStore(settings.data_dir)
+        self.radar_lock = asyncio.Lock()
 
     # ------------------------------------------------------------------ SPY
     async def spy(
@@ -67,9 +75,7 @@ class Engine:
         current = video_vph(video)
         baseline = baseline_vph(recent, exclude_id=video_id)
         tae = round(current / baseline, 1) if baseline > 0 else 0.0
-        if not market:
-            country = channel["snippet"].get("country", "")
-            market = country if country in MARKETS else (country or "GLOBAL")
+        market = market or market_of(channel)
 
         markers, transcript, comments = await asyncio.gather(
             fetch_heatmap(self.http, video_id),
@@ -114,6 +120,8 @@ class Engine:
             current_vph=round(current),
             baseline_vph=round(baseline),
             published_hours_ago=round(hours_since(snippet["publishedAt"])),
+            duration_seconds=parse_duration(video.get("contentDetails", {}).get("duration", "")),
+            heatmap_curve=heatmap_curve(markers),
             lark_record_id=previous.lark_record_id if previous else None,
             heatmap_peaks=HeatmapPeaks(retention_spikes=spikes, retention_drops=drops),
             deconstruction=result.deconstruction,
@@ -122,8 +130,7 @@ class Engine:
 
         if self.lark.configured:
             try:
-                record.lark_record_id = await self.lark.upsert_record(record)
-                record.lark_synced = True
+                await self._push_lark(record)
             except Exception as exc:  # Lark lỗi không được làm mất kết quả phân tích
                 log.warning("Đồng bộ Lark thất bại: %s", exc)
                 if notify:
@@ -133,6 +140,82 @@ class Engine:
         if notify:
             await self.telegram.send(format_record(record), chat_id)
         return record
+
+    async def _push_lark(self, record: OutlierRecord) -> None:
+        record.lark_record_id = await self.lark.upsert_record(record)
+        record.lark_synced = True
+
+    async def sync_lark(self, video_id: str) -> OutlierRecord:
+        """Đồng bộ lại 1 video đã phân tích sang Lark Base (vd: sau khi sửa cấu hình Lark)."""
+        record = self.store.get(video_id)
+        if not record:
+            raise KeyError(video_id)
+        await self._push_lark(record)
+        await self.store.upsert(record)
+        return record
+
+    # -------------------------------------------------------------- RADAR
+    async def watch(self, channel_url: str) -> WatchChannel:
+        ref = parse_channel_ref(channel_url)
+        if not ref:
+            raise ValueError(f"Link kênh không hợp lệ: {channel_url}")
+        channel = await self.youtube.channel(ref)
+        snippet = channel["snippet"]
+        existing = self.watchlist.get(channel["id"])
+        item = WatchChannel(
+            channel_id=channel["id"],
+            title=snippet["title"],
+            market=market_of(channel),
+            thumbnail_url=best_thumbnail(snippet),
+            **({"added_at": existing.added_at, "last_scanned_at": existing.last_scanned_at} if existing else {}),
+        )
+        await self.watchlist.upsert(item)
+        return item
+
+    async def radar_scan(self, notify: bool = True, chat_id: Optional[str] = None) -> list[OutlierRecord]:
+        """Quét video mới của các kênh theo dõi, tự mổ xẻ những video đột biến (TAE cao)."""
+        if self.radar_lock.locked():
+            raise RuntimeError("Radar đang quét, hãy đợi lượt hiện tại xong")
+        async with self.radar_lock:
+            s = self.settings
+            candidates: list[tuple[float, str, dict]] = []
+            for item in self.watchlist.list():
+                try:
+                    channel = await self.youtube.channel(("id", item.channel_id))
+                    uploads = await self.youtube.recent_uploads(channel, limit=15)
+                except YouTubeError as exc:
+                    log.warning("Radar không quét được kênh %s: %s", item.title, exc)
+                    continue
+                for v in uploads:
+                    if self.store.get(v["id"]) or hours_since(v["snippet"]["publishedAt"]) > s.radar_max_age_hours:
+                        continue
+                    base = baseline_vph(uploads, exclude_id=v["id"])
+                    tae = video_vph(v) / base if base > 0 else 0
+                    if tae >= s.radar_min_tae:
+                        candidates.append((tae, item.market, v))
+                item.last_scanned_at = datetime.now(timezone.utc).isoformat()
+                await self.watchlist.upsert(item)
+
+            candidates.sort(key=lambda c: c[0], reverse=True)
+            picked = candidates[: s.radar_max_analyze]
+            if notify and picked:
+                lines = [
+                    f"• <b>{tae:.1f}x</b> [{m}] {esc(v['snippet']['channelTitle'])} — {esc(v['snippet']['title'])}"
+                    for tae, m, v in picked
+                ]
+                await self.telegram.send(
+                    f"📡 <b>Radar phát hiện {len(candidates)} video đột biến</b>\n\n" + "\n".join(lines)
+                    + "\n\n🔬 Đang mổ xẻ...",
+                    chat_id,
+                )
+
+            records = []
+            for _, market, v in picked:
+                try:
+                    records.append(await self.spy(v["id"], notify=notify, chat_id=chat_id, market=market))
+                except Exception as exc:
+                    log.warning("Radar mổ xẻ %s lỗi: %s", v["id"], exc)
+            return records
 
     # ------------------------------------------------------------- DISCOVER
     async def discover(

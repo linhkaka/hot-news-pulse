@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from richtube.youtube import baseline_vph, parse_channel_ref, parse_video_id, video_vph
+from richtube.youtube import baseline_vph, parse_channel_ref, parse_duration, parse_video_id, video_vph
 
 NOW = datetime(2026, 10, 17, tzinfo=timezone.utc)
 
@@ -45,3 +45,10 @@ def test_vph_and_baseline():
     ]
     assert baseline_vph(recent, exclude_id="a", now=NOW) == 20
     assert baseline_vph([], now=NOW) == 0
+
+
+def test_parse_duration():
+    assert parse_duration("PT1H2M3S") == 3723
+    assert parse_duration("PT45S") == 45
+    assert parse_duration("P1DT1M") == 86460
+    assert parse_duration("") == 0

@@ -30,7 +30,7 @@ def video(vid, views, hours_ago, channel=CHANNEL, title="Video"):
             "publishedAt": iso(hours_ago), "thumbnails": {"high": {"url": f"https://i.ytimg.com/vi/{vid}/hq.jpg"}},
         },
         "statistics": {"viewCount": str(views)},
-        "contentDetails": {},
+        "contentDetails": {"duration": "PT10M"},
     }
 
 
@@ -113,6 +113,8 @@ async def test_spy_full_pipeline(settings, mocked):
     assert [p.note for p in record.heatmap_peaks.retention_spikes] == ["spike note 0", "spike note 1", "spike note 2"]
     assert record.heatmap_peaks.retention_drops[0].note == "drop note 0"
     assert record.blueprint.packaging_blueprint.titles == ["T1", "T2", "T3"]
+    assert record.duration_seconds == 600
+    assert len(record.heatmap_curve) == 20 and record.heatmap_curve[0] == 1.0
 
     sent = json.loads(gemini.calls.last.request.content)
     parts = sent["contents"][0]["parts"]
@@ -197,3 +199,44 @@ async def test_discover_builds_grid_and_analyzes_top(settings, mocked):
     assert records[0].market == "US"
     grid_msg = [json.loads(c.request.content)["text"] for c in mocked.calls if "api.telegram.org" in str(c.request.url)][0]
     assert "Lưới 3x3" in grid_msg and "Rival hit" in grid_msg
+
+
+async def test_resync_lark_after_failure(settings, mocked):
+    mocked.post(GEMINI).mock(return_value=gemini_reply(sample_analysis()))
+    records_route = mocked.post(f"{LARK}/bitable/v1/apps/base/tables/tbl/records")
+    records_route.mock(return_value=httpx.Response(200, json={"code": 1254045, "msg": "FieldNameNotFound"}))
+    async with httpx.AsyncClient() as http:
+        engine = Engine(settings, http)
+        assert (await engine.spy(VID, notify=False)).lark_synced is False
+        records_route.mock(return_value=httpx.Response(200, json={"code": 0, "data": {"record": {"record_id": "rec_9"}}}))
+        record = await engine.sync_lark(VID)
+    assert record.lark_synced and record.lark_record_id == "rec_9"
+    assert engine.store.get(VID).lark_record_id == "rec_9"
+
+
+async def test_radar_scan_analyzes_new_outliers_once(settings, mocked):
+    mocked.post(GEMINI).mock(return_value=gemini_reply(sample_analysis()))
+    settings.radar_min_tae = 3.0
+    async with httpx.AsyncClient() as http:
+        engine = Engine(settings, http)
+        watched = await engine.watch(f"https://www.youtube.com/channel/{CHANNEL}")
+        assert watched.title == "MagnatesMedia" and watched.market == "US"
+
+        first = await engine.radar_scan(chat_id="333")
+        # Chỉ VID (10 giờ tuổi, TAE 25x) đạt; các video 100 giờ tuổi bị bỏ vì quá 72h
+        assert [r.video_id for r in first] == [VID]
+        assert engine.watchlist.get(CHANNEL).last_scanned_at is not None
+
+        # Lần quét sau không phân tích lại video đã có
+        assert await engine.radar_scan() == []
+
+    texts = [json.loads(c.request.content)["text"] for c in mocked.calls if "api.telegram.org" in str(c.request.url)]
+    assert any("Radar phát hiện 1 video" in t for t in texts)
+
+
+async def test_radar_rejects_concurrent_scan(settings, mocked):
+    async with httpx.AsyncClient() as http:
+        engine = Engine(settings, http)
+        async with engine.radar_lock:
+            with pytest.raises(RuntimeError):
+                await engine.radar_scan()

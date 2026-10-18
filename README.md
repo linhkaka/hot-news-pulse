@@ -22,6 +22,9 @@ docker compose up -d --build
 - API + tài liệu: http://localhost:8000/docs
 - Telegram: nhắn `/start` cho bot của bạn
 
+**Tính năng chính:** Spy video outlier · Tìm đối thủ 6 thị trường · Radar 24/7 tự quét kênh theo dõi ·
+Biểu đồ sóng giữ chân · Kịch bản 4 cột (tải .md / .csv) · Đồng bộ Lark Base · Telegram Bot.
+
 Xem log: `docker compose logs -f` · Dừng: `docker compose down`
 
 ### Chạy trên VPS

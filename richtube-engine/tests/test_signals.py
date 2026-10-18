@@ -1,4 +1,4 @@
-from richtube.signals import fmt_ts, parse_heatmap, summarize_heatmap
+from richtube.signals import fmt_ts, heatmap_curve, parse_heatmap, summarize_heatmap
 
 
 def _new_format(values, step_ms=10_000):
@@ -34,3 +34,13 @@ def test_summarize_finds_peaks_and_drop():
 
 def test_summarize_too_short():
     assert summarize_heatmap([(0, 1, 1)]) == ([], [])
+
+
+def test_heatmap_curve_downsamples_keeping_peaks():
+    markers = [(i, 1, 0.1) for i in range(250)]
+    markers[123] = (123, 1, 0.9)
+    curve = heatmap_curve(markers)
+    assert len(curve) == 100
+    assert max(curve) == 0.9
+    assert heatmap_curve(markers[:10]) == [0.1] * 10
+    assert heatmap_curve([]) == []

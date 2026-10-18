@@ -4,9 +4,9 @@
 // Module: FastAPI Client Connector
 // ============================================================================
 
-import type { EngineHealth, Job, OutlierRecord } from "@/types/richtube";
+import type { EngineHealth, Job, OutlierRecord, WatchChannel } from "@/types/richtube";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_RICHTUBE_API_URL || "http://localhost:8000";
+export const API_BASE_URL = process.env.NEXT_PUBLIC_RICHTUBE_API_URL || "http://localhost:8000";
 const API_KEY = process.env.NEXT_PUBLIC_RICHTUBE_API_KEY || "";
 
 function headers(): HeadersInit {
@@ -73,6 +73,60 @@ export async function checkEngineHealth(): Promise<EngineHealth> {
       lark_configured: false,
       telegram_configured: false,
       records: 0,
+      watchlist: 0,
+      radar_interval_hours: 0,
     };
   }
+}
+
+// ---------------------------------------------------------------- Từng video
+
+export async function deleteOutlier(videoId: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/outliers/${videoId}`, { method: "DELETE", headers: headers() });
+  if (!res.ok) throw await readError(res, "Không xoá được video");
+}
+
+export async function syncLark(videoId: string): Promise<OutlierRecord> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/outliers/${videoId}/sync-lark`, { method: "POST", headers: headers() });
+  if (!res.ok) throw await readError(res, "Đồng bộ Lark thất bại");
+  return res.json();
+}
+
+export async function reanalyzeOutlier(videoId: string): Promise<Job> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/outliers/${videoId}/reanalyze`, { method: "POST", headers: headers() });
+  if (!res.ok) throw await readError(res, "Không phân tích lại được");
+  return res.json();
+}
+
+export function exportUrl(videoId: string, format: "md" | "csv"): string {
+  return `${API_BASE_URL}/api/v1/outliers/${videoId}/export.${format}`;
+}
+
+// ------------------------------------------------------------ Radar & Watchlist
+
+export async function fetchWatchlist(): Promise<WatchChannel[]> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/watchlist`, { cache: "no-store" });
+  if (!res.ok) throw await readError(res, "Không tải được danh sách theo dõi");
+  return res.json();
+}
+
+export async function addWatch(channelUrl: string): Promise<WatchChannel> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/watchlist`, {
+    method: "POST",
+    headers: headers(),
+    body: JSON.stringify({ channel_url: channelUrl }),
+  });
+  if (!res.ok) throw await readError(res, "Không thêm được kênh");
+  return res.json();
+}
+
+export async function removeWatch(channelId: string): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/watchlist/${channelId}`, { method: "DELETE", headers: headers() });
+  if (!res.ok) throw await readError(res, "Không bỏ theo dõi được");
+}
+
+export async function runRadar(): Promise<Job> {
+  const res = await fetch(`${API_BASE_URL}/api/v1/radar/run`, { method: "POST", headers: headers() });
+  if (!res.ok) throw await readError(res, "Không chạy được Radar");
+  return res.json();
 }

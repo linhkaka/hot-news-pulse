@@ -96,6 +96,17 @@ def summarize_heatmap(markers: list[Marker], max_spikes: int = 3, max_drops: int
     return [to_point(*s) for s in spikes], [to_point(*d) for d in drops]
 
 
+def heatmap_curve(markers: list[Marker], points: int = 100) -> list[float]:
+    """Rút gọn heatmap thành tối đa `points` điểm cách đều để vẽ biểu đồ sóng."""
+    if not markers:
+        return []
+    values = [m[2] for m in markers]
+    if len(values) <= points:
+        return [round(v, 3) for v in values]
+    step = len(values) / points
+    return [round(max(values[int(i * step) : max(int((i + 1) * step), int(i * step) + 1)]), 3) for i in range(points)]
+
+
 async def fetch_heatmap(http: httpx.AsyncClient, video_id: str) -> list[Marker]:
     try:
         res = await http.get(

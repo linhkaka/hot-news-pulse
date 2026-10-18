@@ -21,11 +21,41 @@ import {
   ExternalLink,
   Layers,
   CheckCircle2,
+  Download,
+  RefreshCw,
+  Trash2,
+  Radio,
 } from "lucide-react";
-import { EngineHealth, Job, OutlierRecord } from "@/types/richtube";
-import { triggerVideoSpy, triggerChannelDiscovery, checkEngineHealth, fetchOutliers, getJob } from "@/lib/api";
+import { EngineHealth, Job, OutlierRecord, WatchChannel } from "@/types/richtube";
+import {
+  addWatch,
+  checkEngineHealth,
+  deleteOutlier,
+  exportUrl,
+  fetchOutliers,
+  fetchWatchlist,
+  getJob,
+  reanalyzeOutlier,
+  removeWatch,
+  runRadar,
+  syncLark,
+  triggerChannelDiscovery,
+  triggerVideoSpy,
+} from "@/lib/api";
+import RetentionChart from "@/components/RetentionChart";
+import WatchlistPanel from "@/components/WatchlistPanel";
 
 const MARKETS = ["US", "JP", "KR", "ES", "DE", "FR"];
+
+// Đường cong mẫu cho dữ liệu Demo (video 12 phút, khớp với các đỉnh/vùng trũng mẫu)
+const DEMO_CURVE = Array.from({ length: 100 }, (_, i) => {
+  const t = i * 7.2;
+  const bump = (center: number, width: number, height: number) =>
+    height * Math.exp(-(((t - center) / width) ** 2));
+  const base = 0.45 - t / 3000;
+  const dip = -0.33 * Math.exp(-(((t - 400) / 30) ** 2));
+  return Math.max(0.05, Math.min(1, base + bump(5, 15, 0.5) + bump(272, 20, 0.45) + bump(567, 20, 0.4) + dip));
+});
 
 // Dữ liệu mẫu khởi tạo để hiển thị trực quan ngay khi mở Dashboard
 const INITIAL_OUTLIERS: OutlierRecord[] = [
@@ -40,6 +70,8 @@ const INITIAL_OUTLIERS: OutlierRecord[] = [
     current_vph: 4280,
     baseline_vph: 790,
     published_hours_ago: 36,
+    duration_seconds: 720,
+    heatmap_curve: DEMO_CURVE,
     lark_synced: true,
     lark_record_id: "rec_snakemedia_01",
     heatmap_peaks: {
@@ -134,7 +166,18 @@ export default function RichTubeDashboard() {
   const [isTriggering, setIsTriggering] = useState(false);
   const [statusBanner, setStatusBanner] = useState<string | null>(null);
   const [health, setHealth] = useState<EngineHealth | null>(null);
+  const [watchlist, setWatchlist] = useState<WatchChannel[]>([]);
+  const [sortBy, setSortBy] = useState<"new" | "tae">("new");
+  const [busyAction, setBusyAction] = useState<string | null>(null);
   const engineOnline = health === null ? null : health.status === "online";
+
+  const loadWatchlist = useCallback(async () => {
+    try {
+      setWatchlist(await fetchWatchlist());
+    } catch {
+      // Engine offline
+    }
+  }, []);
 
   // Tải dữ liệu thật từ RICHTUBE Engine; nếu chưa có thì giữ dữ liệu mẫu
   const loadOutliers = useCallback(async (focusVideoId?: string) => {
@@ -156,7 +199,21 @@ export default function RichTubeDashboard() {
   useEffect(() => {
     checkEngineHealth().then(setHealth);
     loadOutliers();
-  }, [loadOutliers]);
+    loadWatchlist();
+    // Radar chạy ngầm trên Engine -> định kỳ làm mới danh sách
+    const timer = setInterval(() => {
+      loadOutliers();
+      loadWatchlist();
+    }, 60_000);
+    return () => clearInterval(timer);
+  }, [loadOutliers, loadWatchlist]);
+
+  const showError = (err: unknown) =>
+    setStatusBanner(
+      err instanceof TypeError
+        ? "⚠️ Không kết nối được Backend (chế độ Demo). Hãy bật RICHTUBE Engine ở cổng 8000 để chạy thực tế."
+        : `⚠️ ${(err as Error).message}`
+    );
 
   // Theo dõi lệnh đang chạy ở Engine cho tới khi xong
   const watchJob = async (job: Job) => {
@@ -166,6 +223,7 @@ export default function RichTubeDashboard() {
         const latest = await getJob(job.job_id);
         if (latest.status === "done") {
           await loadOutliers(latest.result_video_ids[0]);
+          loadWatchlist();
           checkEngineHealth().then(setHealth);
           setStatusBanner(
             latest.result_video_ids.length
@@ -194,11 +252,18 @@ export default function RichTubeDashboard() {
     }
   };
 
-  const handleQuickAction = async (mode: "spy" | "discover") => {
+  const handleQuickAction = async (mode: "spy" | "discover" | "watch") => {
     if (!spyInput.trim()) return;
     setIsTriggering(true);
     setStatusBanner(null);
     try {
+      if (mode === "watch") {
+        const channel = await addWatch(spyInput.trim());
+        setStatusBanner(`📡 Đã thêm "${channel.title}" [${channel.market}] vào Radar 24/7.`);
+        setSpyInput("");
+        loadWatchlist();
+        return;
+      }
       let job: Job;
       if (mode === "spy") {
         job = await triggerVideoSpy(spyInput.trim());
@@ -210,20 +275,79 @@ export default function RichTubeDashboard() {
       setSpyInput("");
       watchJob(job);
     } catch (err) {
-      setStatusBanner(
-        err instanceof TypeError
-          ? "⚠️ Không kết nối được Backend (chế độ Demo). Hãy bật RICHTUBE Engine ở cổng 8000 để chạy thực tế."
-          : `⚠️ ${(err as Error).message}`
-      );
+      showError(err);
     } finally {
       setIsTriggering(false);
     }
   };
 
-  const filteredOutliers =
-    selectedMarketFilter === "ALL"
-      ? outliers
-      : outliers.filter((o) => o.market === selectedMarketFilter);
+  // Các thao tác trên 1 video / Radar. Ở chế độ Demo thì nhắc bật Engine.
+  const runAction = async (name: string, action: () => Promise<void>) => {
+    if (isDemoData && name !== "radar" && name !== "unwatch") {
+      setStatusBanner("ℹ️ Đây là dữ liệu mẫu. Hãy Spy một video thật để dùng chức năng này.");
+      return;
+    }
+    setBusyAction(name);
+    try {
+      await action();
+    } catch (err) {
+      showError(err);
+    } finally {
+      setBusyAction(null);
+    }
+  };
+
+  const handleSyncLark = () =>
+    runAction("lark", async () => {
+      const record = await syncLark(selected.video_id);
+      setOutliers((list) => list.map((r) => (r.video_id === record.video_id ? record : r)));
+      setSelected(record);
+      setStatusBanner(`✅ Đã đồng bộ Lark Base (record ${record.lark_record_id}).`);
+    });
+
+  const handleReanalyze = () =>
+    runAction("reanalyze", async () => {
+      const job = await reanalyzeOutlier(selected.video_id);
+      setStatusBanner("🔬 Đang phân tích lại video với số liệu mới nhất...");
+      watchJob(job);
+    });
+
+  const handleDelete = () =>
+    runAction("delete", async () => {
+      if (!window.confirm(`Xoá "${selected.title}" khỏi Dashboard?`)) return;
+      await deleteOutlier(selected.video_id);
+      const rest = outliers.filter((r) => r.video_id !== selected.video_id);
+      if (rest.length) {
+        setOutliers(rest);
+        setSelected(rest[0]);
+      } else {
+        setOutliers(INITIAL_OUTLIERS);
+        setSelected(INITIAL_OUTLIERS[0]);
+        setIsDemoData(true);
+      }
+      setStatusBanner("🗑️ Đã xoá video khỏi Dashboard.");
+    });
+
+  const handleRunRadar = () =>
+    runAction("radar", async () => {
+      const job = await runRadar();
+      setStatusBanner(`📡 Radar đang quét ${watchlist.length} kênh theo dõi...`);
+      watchJob(job);
+    });
+
+  const handleUnwatch = (channel: WatchChannel) =>
+    runAction("unwatch", async () => {
+      await removeWatch(channel.channel_id);
+      setWatchlist((list) => list.filter((c) => c.channel_id !== channel.channel_id));
+    });
+
+  const filteredOutliers = (
+    selectedMarketFilter === "ALL" ? outliers : outliers.filter((o) => o.market === selectedMarketFilter)
+  )
+    .slice()
+    .sort((a, b) =>
+      sortBy === "tae" ? b.tae_score - a.tae_score : (b.analyzed_at ?? "").localeCompare(a.analyzed_at ?? "")
+    );
 
   return (
     <div className="h-screen bg-[#090B10] text-slate-100 flex flex-col font-sans overflow-hidden">
@@ -249,13 +373,13 @@ export default function RichTubeDashboard() {
         </div>
 
         {/* Thanh nhập lệnh nhanh: Spy Video hoặc Discover Channel */}
-        <div className="flex items-center gap-2 w-[520px] shrink-0">
+        <div className="flex items-center gap-2 w-[640px] shrink-0">
           <input
             type="text"
             value={spyInput}
             onChange={(e) => setSpyInput(e.target.value)}
             onKeyDown={(e) => e.key === "Enter" && handleQuickAction("spy")}
-            placeholder="Dán link Video để bóc tách 60s hoặc link Kênh để tìm đối thủ..."
+            placeholder="Dán link Video để mổ xẻ, hoặc link Kênh để tìm đối thủ / theo dõi..."
             className="w-full bg-slate-900/90 border border-slate-700/80 rounded-lg px-3.5 py-2 text-xs text-slate-100 placeholder-slate-500 focus:outline-none focus:border-emerald-500"
           />
           <button
@@ -273,6 +397,15 @@ export default function RichTubeDashboard() {
           >
             <Globe className="w-3.5 h-3.5" />
             Tìm Kênh Đa Quốc Gia
+          </button>
+          <button
+            onClick={() => handleQuickAction("watch")}
+            disabled={isTriggering}
+            title="Thêm kênh vào Radar để tự quét video mới 24/7"
+            className="px-3.5 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 border border-slate-700 font-semibold text-xs flex items-center gap-1.5 whitespace-nowrap transition"
+          >
+            <Radio className="w-3.5 h-3.5" />
+            Theo dõi
           </button>
         </div>
 
@@ -336,8 +469,23 @@ export default function RichTubeDashboard() {
             </span>
           </div>
 
-          {/* Bộ lọc thị trường (US, JP, KR, ES, DE, FR) */}
+          <WatchlistPanel
+            channels={watchlist}
+            intervalHours={health?.radar_interval_hours ?? 0}
+            busy={busyAction === "radar"}
+            onRemove={handleUnwatch}
+            onRunRadar={handleRunRadar}
+          />
+
+          {/* Bộ lọc thị trường (US, JP, KR, ES, DE, FR) + sắp xếp */}
           <div className="px-4 py-2.5 border-b border-slate-800/60 flex items-center gap-1.5 overflow-x-auto">
+            <button
+              onClick={() => setSortBy(sortBy === "new" ? "tae" : "new")}
+              title="Đổi cách sắp xếp"
+              className="px-2 py-1 rounded text-[11px] font-bold bg-slate-800 text-amber-300 whitespace-nowrap"
+            >
+              {sortBy === "new" ? "Mới nhất" : "TAE cao"}
+            </button>
             {["ALL", ...MARKETS].map((mkt) => (
               <button
                 key={mkt}
@@ -435,6 +583,14 @@ export default function RichTubeDashboard() {
                 <span className="text-xs font-bold text-emerald-400 uppercase tracking-wider">
                   🔥 Dữ liệu Ngầm Most Replayed (YouTube Heatmap)
                 </span>
+              </div>
+              <div className="mb-3">
+                <RetentionChart
+                  curve={selected.heatmap_curve ?? []}
+                  duration={selected.duration_seconds ?? 0}
+                  spikes={selected.heatmap_peaks.retention_spikes}
+                  drops={selected.heatmap_peaks.retention_drops}
+                />
               </div>
               <div className="space-y-2">
                 {selected.heatmap_peaks.retention_spikes.map((spike, idx) => (
@@ -549,10 +705,60 @@ export default function RichTubeDashboard() {
               </h2>
             </div>
 
-            <span className="px-2.5 py-1 rounded-md bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-[11px] font-bold flex items-center gap-1.5">
+            <span
+              className={`px-2.5 py-1 rounded-md border text-[11px] font-bold flex items-center gap-1.5 ${
+                selected.lark_synced
+                  ? "bg-emerald-500/15 border-emerald-500/30 text-emerald-300"
+                  : "bg-slate-900 border-slate-700 text-slate-400"
+              }`}
+            >
               <Layers className="w-3.5 h-3.5" />
-              Lark Base Record: {selected.lark_record_id ?? "—"}
+              Lark: {selected.lark_synced ? selected.lark_record_id : "chưa đồng bộ"}
             </span>
+          </div>
+
+          {/* Thanh thao tác cho video đang chọn */}
+          <div className="px-4 py-2 border-b border-slate-800/60 flex items-center gap-1.5 flex-wrap text-[11px]">
+            <button
+              onClick={handleSyncLark}
+              disabled={busyAction !== null}
+              className="px-2.5 py-1 rounded-md bg-emerald-500 hover:bg-emerald-400 disabled:opacity-50 text-slate-950 font-bold flex items-center gap-1"
+            >
+              <Layers className={`w-3.5 h-3.5 ${busyAction === "lark" ? "animate-pulse" : ""}`} />
+              Đồng bộ Lark Base
+            </button>
+            {(["md", "csv"] as const).map((fmt) => (
+              <a
+                key={fmt}
+                href={isDemoData ? undefined : exportUrl(selected.video_id, fmt)}
+                onClick={(e) => {
+                  if (isDemoData) {
+                    e.preventDefault();
+                    setStatusBanner("ℹ️ Đây là dữ liệu mẫu. Hãy Spy một video thật để tải kịch bản.");
+                  }
+                }}
+                className="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold flex items-center gap-1 cursor-pointer"
+              >
+                <Download className="w-3.5 h-3.5" />
+                {fmt === "md" ? "Kịch bản .md" : "Bảng .csv"}
+              </a>
+            ))}
+            <button
+              onClick={handleReanalyze}
+              disabled={busyAction !== null}
+              className="px-2.5 py-1 rounded-md bg-slate-800 hover:bg-slate-700 disabled:opacity-50 text-slate-200 font-semibold flex items-center gap-1"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Phân tích lại
+            </button>
+            <button
+              onClick={handleDelete}
+              disabled={busyAction !== null}
+              className="ml-auto px-2.5 py-1 rounded-md text-slate-500 hover:text-red-400 disabled:opacity-50 flex items-center gap-1"
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Xoá
+            </button>
           </div>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-5">

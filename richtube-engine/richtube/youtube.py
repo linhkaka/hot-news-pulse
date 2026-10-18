@@ -75,6 +75,15 @@ def baseline_vph(videos: list[dict], exclude_id: Optional[str] = None, now: Opti
     return median(values) if values else 0.0
 
 
+def parse_duration(iso: str) -> int:
+    """Đổi thời lượng ISO 8601 của YouTube (vd: PT1H2M3S) sang giây."""
+    m = re.fullmatch(r"P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?", iso or "")
+    if not m:
+        return 0
+    d, h, mi, s = (int(x) if x else 0 for x in m.groups())
+    return d * 86400 + h * 3600 + mi * 60 + s
+
+
 def best_thumbnail(snippet: dict) -> str:
     thumbs = snippet.get("thumbnails", {})
     for key in ("maxres", "standard", "high", "medium", "default"):

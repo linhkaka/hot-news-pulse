@@ -40,6 +40,12 @@ class Settings(BaseSettings):
     data_dir: str = "data"
     discover_analyze_top: int = 3
 
+    # Radar tự động quét các kênh trong danh sách theo dõi
+    radar_interval_hours: float = 6  # 0 = tắt quét tự động
+    radar_min_tae: float = 3.0
+    radar_max_age_hours: int = 72
+    radar_max_analyze: int = 3
+
     @property
     def gemini_keys(self) -> list[str]:
         return _split(self.gemini_api_keys)

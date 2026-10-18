@@ -7,6 +7,8 @@ FastAPI + Telegram Bot. Nhận link video/kênh YouTube và tự làm các bư�
    Gemini "xem" 2 phút đầu video và mổ xẻ Hook, Bao bì, nhịp kể chuyện, lỗ hổng khán giả.
 3. **Production Blueprint**: 3 tiêu đề, prompt thumbnail và kịch bản phân cảnh 4 cột (Voiceover · Visual · AI Prompt · SFX).
 4. **Đồng bộ**: lưu kết quả, đẩy sang **Lark Base** và gửi **Telegram**.
+5. **Radar 24/7**: theo dõi danh sách kênh, cứ `RADAR_INTERVAL_HOURS` giờ lại quét video mới.
+   Video nào có TAE ≥ `RADAR_MIN_TAE` thì tự mổ xẻ và báo về Telegram.
 
 ## 1. Chuẩn bị key
 
@@ -73,12 +75,20 @@ Tài liệu API tự động: http://localhost:8000/docs
 | POST | `/api/v1/spy/video` | `{ "video_url": "...", "notify_telegram": true }` → trả về job (chạy nền) |
 | POST | `/api/v1/discover/channel` | `{ "seed_channel_url": "...", "target_markets": ["US","JP"] }` → job |
 | GET | `/api/v1/jobs/{job_id}` | Tiến độ: `queued` / `running` / `done` / `failed` |
+| POST | `/api/v1/outliers/{video_id}/sync-lark` | Đồng bộ lại 1 video sang Lark Base |
+| POST | `/api/v1/outliers/{video_id}/reanalyze` | Phân tích lại với số liệu mới → job |
+| DELETE | `/api/v1/outliers/{video_id}` | Xoá video khỏi Dashboard |
+| GET | `/api/v1/outliers/{video_id}/export.md` · `.csv` | Tải kịch bản cho Biên kịch / Editor |
+| GET | `/api/v1/watchlist` | Danh sách kênh Radar đang theo dõi |
+| POST | `/api/v1/watchlist` | `{ "channel_url": "..." }` thêm kênh |
+| DELETE | `/api/v1/watchlist/{channel_id}` | Bỏ theo dõi |
+| POST | `/api/v1/radar/run` | Quét Radar ngay → job |
 
-Nếu đặt `RICHTUBE_API_KEY`, các lệnh POST phải gửi kèm header `X-API-Key` (Web và Bot tự gửi).
+Nếu đặt `RICHTUBE_API_KEY`, các lệnh POST/DELETE phải gửi kèm header `X-API-Key` (Web và Bot tự gửi).
 
 ## 5. Lệnh Telegram Bot
 
-`/spy <link video>` · `/discover <link kênh>` · `/top` · `/status` · `/id` · hoặc dán thẳng link video.
+`/spy <link video>` · `/discover <link kênh>` · `/watch <link kênh>` · `/watchlist` · `/unwatch <số>` · `/radar` · `/top` · `/status` · `/id` · hoặc dán thẳng link video.
 
 Chỉ những chat có trong `TELEGRAM_CHAT_ID` / `TELEGRAM_ALLOWED_CHAT_IDS` mới ra lệnh được.
 
@@ -88,6 +98,7 @@ Chỉ những chat có trong `TELEGRAM_CHAT_ID` / `TELEGRAM_ALLOWED_CHAT_IDS` m�
 - **Heatmap & Transcript** không có trong API chính thức, nên Engine đọc từ trang YouTube theo kiểu *best-effort*.
   Video không có "Most Replayed" (video mới, ít view) hoặc YouTube chặn IP máy chủ thì phần này để trống, các phần khác vẫn chạy.
 - **Quota YouTube** (10.000 đơn vị/ngày miễn phí): 1 lệnh Spy tốn khoảng 5 đơn vị. 1 lệnh Discover 6 thị trường tốn khoảng 700 đơn vị (mỗi lượt tìm kiếm tốn 100).
+  Radar tốn khoảng 3 đơn vị cho mỗi kênh mỗi lượt quét (50 kênh × 4 lượt/ngày ≈ 600 đơn vị), cộng thêm phần mổ xẻ video đột biến.
 - **Bảo mật:** nếu mở cổng 8000 ra Internet, hãy đặt `RICHTUBE_API_KEY` để người lạ không dùng hết quota của bạn.
 
 ## 7. Kiểm thử
