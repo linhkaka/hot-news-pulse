@@ -24,6 +24,7 @@ import requests
 
 from config import facebook_enabled, load_config
 from graph import GraphAPIError, GraphClient, RateLimitError, TokenError, parse_fb_time
+from report import ScanReport, format_report, snapshots_csv
 from store import Store
 from telegram_bot import CommandBot, Telegram, TelegramError
 from youtube import YouTubeClient, YouTubeScanner, format_interval
@@ -73,8 +74,12 @@ def format_message(page_name, reel, views, threshold, now=None):
     return "\n".join(lines)
 
 
+# Set from the config in main(); messages show times in this zone.
+DISPLAY_TZ = timezone(timedelta(hours=7))
+
+
 def format_time(ts):
-    return datetime.fromtimestamp(ts, timezone.utc).astimezone().strftime("%H:%M %d/%m/%Y")
+    return datetime.fromtimestamp(ts, DISPLAY_TZ).strftime("%H:%M %d/%m/%Y")
 
 
 class Tracker:
@@ -101,6 +106,7 @@ class Tracker:
         self._warned_missing = set()
         # reel_id -> clock() of the last view check, for the slow lane of older Reels.
         self._last_checked = {}
+        self.last_report = None  # ScanReport of the latest successful Facebook scan
 
     def threshold(self):
         return int(self.store.get_setting("view_threshold", self.cfg["view_threshold"]))
@@ -299,7 +305,7 @@ class Tracker:
         last = self._last_checked.get(reel["id"])
         return last is None or self.clock() - last >= self.cfg["slow_check_interval_seconds"]
 
-    def _scan_page(self, page, since, threshold, now, abort):
+    def _scan_page(self, page, since, threshold, now, abort, report):
         """Check one Page; returns (alerts sent, Reels checked, Reel ids seen)."""
         page_id, page_name, token = page
         try:
@@ -309,6 +315,7 @@ class Tracker:
             raise
         except GraphAPIError as e:
             log.error("Could not list Reels for %s: %s", page_name, e)
+            report.mark_error(page_id, e)
             return 0, 0, set()
         log.debug("%s: %d recent Reels", page_name, len(reels))
         sent = checked = 0
@@ -316,7 +323,13 @@ class Tracker:
         for reel in reels:
             if abort.is_set():
                 break
-            if self.store.was_notified(reel["id"]) or not self._due_for_check(reel):
+            link = reel_link(reel)
+            prev = self.store.last_views("facebook", reel["id"])
+            if not self._due_for_check(reel):
+                # Slow lane: report the last known views without a new API call.
+                if prev is not None:
+                    report.add_item(page_id, reel["id"], reel.get("description"), link,
+                                    parse_fb_time(reel.get("created_time")), prev, prev)
                 continue
             try:
                 views = self.graph.reel_views(reel["id"], token, self.cfg["view_metrics"])
@@ -328,9 +341,10 @@ class Tracker:
             if views is None:
                 log.debug("No view metric for Reel %s", reel["id"])
                 continue
-            link = reel_link(reel)
             self.store.save_reel(reel["id"], page_id, link, reel.get("description"), views)
-            if views < threshold:
+            report.add_item(page_id, reel["id"], reel.get("description"), link,
+                            parse_fb_time(reel.get("created_time")), views, prev)
+            if views < threshold or self.store.was_notified(reel["id"]):
                 continue
             try:
                 self.telegram.send(format_message(page_name, reel, views, threshold, now))
@@ -349,11 +363,15 @@ class Tracker:
         sent = checked = 0
         seen = set()
         abort = threading.Event()
+        report = ScanReport("facebook", now)
         try:
             pages = self.pages_with_tokens()
+            for page_id, page_name, _ in pages:
+                report.add_source(page_id, page_name,
+                                  self.store.source_scanned_before("facebook", page_id))
             fatal = None
             with ThreadPoolExecutor(max_workers=self.cfg["workers"]) as pool:
-                futures = [pool.submit(self._scan_page, p, since, threshold, now, abort)
+                futures = [pool.submit(self._scan_page, p, since, threshold, now, abort, report)
                            for p in pages]
                 for future in as_completed(futures):
                     try:
@@ -385,6 +403,9 @@ class Tracker:
 
         # Forget Reels that dropped out of the time window.
         self._last_checked = {k: v for k, v in self._last_checked.items() if k in seen}
+        for page_id, _, _ in pages:
+            self.store.mark_source_scanned("facebook", page_id)
+        self.last_report = report
         self._token_alert_sent = False
         self.last_scan_at = self.clock()
         self.last_scan_result = f"{len(pages)} Page, {checked} Reel, gửi {sent} thông báo"
@@ -396,20 +417,51 @@ class Tracker:
             forced = once or self.scan_requested.is_set()
             self.scan_requested.clear()
             now = self.clock()
+            reports = []
             if (
                 self.facebook_enabled
                 and now >= self.cooldown_until
                 and (forced or now >= self.fb_next_due)
             ):
                 self.check_token_expiry()
+                self.last_report = None
                 self.scan_once()
                 self.fb_next_due = self.clock() + self.scan_interval()
+                reports.append(self.last_report)
             if self.youtube and self.youtube.ready(forced):
+                self.youtube.last_report = None
                 self.youtube.scan_once()
+                reports.append(self.youtube.last_report)
+            self.publish_reports([r for r in reports if r is not None])
             if once:
                 return
             self.wakeup.wait(max(1, self._seconds_until_next_scan()))
             self.wakeup.clear()
+
+    def auto_report(self):
+        return self.store.get_setting("auto_report", "1") == "1"
+
+    def publish_reports(self, reports):
+        """Save this scan round's views to the history and send the report."""
+        if not reports:
+            return
+        for report in reports:
+            self.store.add_snapshots(report.snapshot_rows())
+        keep_from = datetime.now(timezone.utc) - timedelta(days=self.cfg["history_days"])
+        self.store.prune_snapshots(keep_from.isoformat())
+        text = format_report(reports, self.cfg["report_top_videos"], format_time(self.clock()))
+        self.store.set_setting("last_report", text)
+        if not self.auto_report():
+            return
+        try:
+            self.telegram.send_long(text)
+        except (TelegramError, requests.RequestException) as e:
+            log.warning("Could not send views report: %s", e)
+
+    def export_csv(self, days):
+        since = datetime.now(timezone.utc) - timedelta(days=days)
+        rows = self.store.snapshots_since(since.isoformat())
+        return snapshots_csv(rows), len(rows)
 
     def _seconds_until_next_scan(self):
         waits = []
@@ -440,6 +492,8 @@ def main(argv=None):
         log.error("Lỗi cấu hình: %s", e)
         return 2
 
+    global DISPLAY_TZ
+    DISPLAY_TZ = timezone(timedelta(hours=cfg["utc_offset_hours"]))
     telegram = Telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"])
     if args.test_telegram:
         try:

@@ -1,9 +1,37 @@
 # Reels & YouTube Tracker → Telegram
 
-Tool chạy 24/7, tự động quét hệ thống **Facebook Fanpage** và **kênh YouTube**
-**mỗi 30 phút** (đổi được thành 60 phút hoặc bất kỳ, bằng lệnh `/interval`). Video/Reel nào **vượt 5.000 view** (ngưỡng tùy chỉnh) thì bot gửi
-**link chính xác** về Telegram — mỗi video chỉ báo **1 lần**.
-Bạn điều khiển tool ngay trong Telegram: thêm/bỏ kênh, đổi ngưỡng, xem top video…
+Tool chạy 24/7, tự động quét danh sách **Facebook Fanpage** và **kênh YouTube** bạn đưa vào
+**mỗi 30 phút** (đổi được thành 60 phút bằng lệnh `/interval 60`). Mỗi lần quét:
+
+1. **Cập nhật số view mới nhất** của từng video trên từng Page/kênh và lưu lại lịch sử.
+2. Gửi **báo cáo** về Telegram: tổng view mỗi Page/kênh, **tăng bao nhiêu so với lần quét
+   trước**, các video tăng mạnh nhất kèm link.
+3. Video/Reel nào **vượt 5.000 view** (ngưỡng tùy chỉnh) thì báo riêng ngay — mỗi video 1 lần.
+
+Lịch sử view xuất ra file Excel bằng lệnh `/export`.
+Bạn điều khiển tool ngay trong Telegram: thêm/bỏ kênh, đổi ngưỡng, xem báo cáo…
+
+Ví dụ báo cáo sau mỗi lần quét:
+
+```
+📊 Báo cáo view — 14:30 19/10/2026
+(số trong ngoặc = tăng so với lần quét trước)
+
+📘 Facebook
+• Page Bán Hàng — 9,600 view (+2,400) · 2 video
+   ↑ 8,100 (+2,100) — Clip review sản phẩm
+     https://www.facebook.com/reel/...
+
+▶️ YouTube
+• Kênh Demo — 9,410 view (+1,333) · 2 video
+   ↑ 9,100 (+1,323) — Short hot
+     https://www.youtube.com/shorts/...
+
+Tổng cộng: 19,010 view (+3,733)
+```
+
+> "View của Page/kênh" = tổng view các video đăng trong **7 ngày gần nhất**
+> (đổi bằng `MAX_VIDEO_AGE_DAYS`, ví dụ 30).
 
 Tool chỉ dùng **nguồn chính thức** (YouTube RSS, YouTube Data API, Facebook Graph API):
 không scrape, không cookie, không proxy → không làm tài khoản bị khóa.
@@ -23,6 +51,8 @@ không scrape, không cookie, không proxy → không làm tài khoản bị kh�
 ## Tính năng
 
 - ⏱ Quét mỗi 30 phút (đổi bằng `/interval`), **nhiều Page/kênh song song** (mặc định 5 luồng)
+- 📊 Báo cáo view sau mỗi lần quét (bật/tắt bằng `/report on|off`), lưu lịch sử 30 ngày,
+  xuất Excel bằng `/export`
 - 📥 YouTube: phát hiện video mới bằng RSS miễn phí; có API key thì lấy số view
   của **50 video chỉ tốn 1 đơn vị quota** → theo dõi được hàng trăm kênh
 - 🐢 Facebook: Reels mới (< 24 giờ) kiểm tra mỗi lần quét; Reels cũ hơn kiểm tra 10 phút/lần
@@ -40,6 +70,9 @@ không scrape, không cookie, không proxy → không làm tài khoản bị kh�
 | Lệnh | Tác dụng |
 |---|---|
 | `/status` | Trạng thái: số kênh/Page, ngưỡng, lần quét gần nhất, quota |
+| `/report` | Xem lại báo cáo view của lần quét gần nhất |
+| `/report off` / `/report on` | Tắt / bật gửi báo cáo tự động sau mỗi lần quét (vẫn quét và lưu lịch sử) |
+| `/export` | Nhận file Excel (CSV) lịch sử view 7 ngày; `/export 30` = 30 ngày |
 | `/addyt <kênh>` | Thêm kênh YouTube: ID `UC...`, link kênh, hoặc `@handle` (cần API key). Thêm nhiều: `/addyt UCaaa UCbbb` |
 | `/removeyt <channel_id>` | Bỏ theo dõi kênh YouTube |
 | `/channels` | Danh sách kênh YouTube đang theo dõi (kèm ID) |
@@ -151,6 +184,9 @@ Cấu hình cơ bản nằm trong file **`.env`** (xem `.env.example`):
 | `POLL_INTERVAL_SECONDS` | Bao lâu quét Facebook 1 lần (giây) | `1800` (30 phút) |
 | `VIEW_THRESHOLD` | Ngưỡng view | `5000` |
 | `WORKERS` | Số Page/kênh quét song song | `5` |
+| `MAX_VIDEO_AGE_DAYS` | Theo dõi video đăng trong N ngày gần nhất | `7` |
+| `REPORT_TOP_VIDEOS` | Số video tăng mạnh nhất liệt kê cho mỗi Page/kênh trong báo cáo | `3` |
+| `UTC_OFFSET_HOURS` | Múi giờ hiển thị trong tin nhắn (7 = Việt Nam) | `7` |
 
 Tùy chọn nâng cao trong `config.json` (copy từ `config.example.json`, không bắt buộc):
 
@@ -161,6 +197,7 @@ Tùy chọn nâng cao trong `config.json` (copy từ `config.example.json`, khô
 | `max_reel_age_days` | Chỉ theo dõi video/Reels đăng trong N ngày | `7` |
 | `fresh_hours` | Reels mới hơn N giờ được kiểm tra mỗi lần quét | `24` |
 | `slow_check_interval_seconds` | Reels cũ hơn kiểm tra cách nhau bao lâu | `600` |
+| `history_days` | Giữ lịch sử view (cho `/export`) bao nhiêu ngày | `30` |
 | `token_warning_days` | Nhắc trước khi token Facebook hết hạn N ngày | `7` |
 | `view_metrics` | Tên metric view Facebook, thử lần lượt | `fb_reels_total_plays`, `blue_reels_play_count` |
 | `graph_api_version` | Phiên bản Facebook Graph API | `v23.0` |
@@ -223,4 +260,5 @@ python -m pytest -q
 | `telegram_bot.py` | Gửi tin Telegram và xử lý các lệnh `/...` |
 | `store.py` | Database SQLite (Page, kênh, cài đặt, video, lịch sử đã báo) |
 | `config.py` | Đọc `.env`, `config.json`, biến môi trường |
+| `report.py` | Báo cáo view mỗi lần quét, xuất file CSV |
 | `net.py` | Kết nối HTTP riêng cho từng luồng quét |

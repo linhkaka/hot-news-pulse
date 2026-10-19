@@ -17,6 +17,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from net import ThreadSessions
+from report import ScanReport
 
 log = logging.getLogger("reels_tracker.youtube")
 
@@ -254,6 +255,7 @@ class YouTubeScanner:
         self.cooldown_until = 0
         self.last_scan_at = None
         self.last_scan_result = "chưa quét"
+        self.last_report = None  # ScanReport of the latest successful scan
         self._key_alert_sent = False
 
     @property
@@ -340,14 +342,18 @@ class YouTubeScanner:
         channels = self.store.active_channels()
         sent = 0
         self.next_due = self.clock() + self.interval_fn()
+        report = ScanReport("youtube", now)
+        for channel_id, title, _ in channels:
+            report.add_source(channel_id, title,
+                              self.store.source_scanned_before("youtube", channel_id))
         try:
+            # Every recent video is re-read each scan so the report has current views.
             pending = {}  # video_id -> (video, channel_id, channel_title)
             with ThreadPoolExecutor(max_workers=self.cfg["workers"]) as pool:
-                results = pool.map(lambda c: (c, self._try_discover(c, since)), channels)
+                results = pool.map(lambda c: (c, self._try_discover(c, since, report)), channels)
                 for (channel_id, title, _), videos in results:
                     for video in videos:
-                        if not self.store.yt_was_notified(video["id"]):
-                            pending[video["id"]] = (video, channel_id, title)
+                        pending[video["id"]] = (video, channel_id, title)
             if self.api and pending:
                 # One request per 50 videos across all channels.
                 for fresh in self.api.videos(list(pending)):
@@ -357,9 +363,12 @@ class YouTubeScanner:
                 if video.get("views") is None:
                     continue
                 link = video.get("link") or video_link(video["id"])
+                prev = self.store.last_views("youtube", video["id"])
                 self.store.save_yt_video(video["id"], channel_id, video.get("title", ""),
                                          link, video["views"])
-                if video["views"] < threshold:
+                report.add_item(channel_id, video["id"], video.get("title", ""), link,
+                                video.get("published"), video["views"], prev)
+                if video["views"] < threshold or self.store.yt_was_notified(video["id"]):
                     continue
                 video["link"] = link
                 try:
@@ -382,19 +391,23 @@ class YouTubeScanner:
             self._send_key_alert(e)
             return sent
 
+        for channel_id, _, _ in channels:
+            self.store.mark_source_scanned("youtube", channel_id)
+        self.last_report = report
         self._key_alert_sent = False
         self.last_scan_at = self.clock()
         self.last_scan_result = f"{len(channels)} kênh, {len(pending)} video, gửi {sent} thông báo"
         log.info("YouTube scan done: %s", self.last_scan_result)
         return sent
 
-    def _try_discover(self, channel, since):
+    def _try_discover(self, channel, since, report):
         try:
             return self._discover(channel, since)
         except (QuotaError, ApiKeyError):
             raise
         except YouTubeError as e:
             log.error("Could not list videos for %s: %s", channel[1], e)
+            report.mark_error(channel[0], e)
             return []
 
     def _send_key_alert(self, error):

@@ -36,9 +36,16 @@ class FakeTelegram:
 
     def __init__(self):
         self.sent = []
+        self.documents = []
 
     def send(self, text, chat_id=None):
         self.sent.append(text)
+
+    def send_long(self, text):
+        self.sent.append(text)
+
+    def send_document(self, filename, content, caption=""):
+        self.documents.append((filename, content, caption))
 
 
 def make_tracker(tmp_path, graph=None, **cfg_overrides):

@@ -29,6 +29,13 @@ DEFAULTS = {
     # which keeps Graph API usage low when many Pages are tracked.
     "fresh_hours": 24,
     "slow_check_interval_seconds": 600,
+    # Each scan sends a views report to Telegram (toggle with /report on|off),
+    # listing this many fastest-growing videos per Page/channel.
+    "report_top_videos": 3,
+    # Keep the per-scan view history (used by /export) this many days.
+    "history_days": 30,
+    # Times in messages are shown in this UTC offset (7 = Vietnam).
+    "utc_offset_hours": 7,
     # Warn on Telegram when the Facebook token expires within this many days.
     "token_warning_days": 7,
 }
@@ -44,6 +51,9 @@ ENV_OVERRIDES = {
     "YOUTUBE_API_KEY": "youtube_api_key",
     "YOUTUBE_POLL_INTERVAL_SECONDS": "youtube_poll_interval_seconds",
     "WORKERS": "workers",
+    "MAX_VIDEO_AGE_DAYS": "max_reel_age_days",
+    "REPORT_TOP_VIDEOS": "report_top_videos",
+    "UTC_OFFSET_HOURS": "utc_offset_hours",
 }
 
 INT_KEYS = (
@@ -55,6 +65,9 @@ INT_KEYS = (
     "workers",
     "fresh_hours",
     "slow_check_interval_seconds",
+    "report_top_videos",
+    "history_days",
+    "utc_offset_hours",
 )
 
 

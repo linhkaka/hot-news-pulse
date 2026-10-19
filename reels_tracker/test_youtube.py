@@ -93,7 +93,7 @@ def test_rss_mode_rejects_handles(tmp_path):
     assert t.store.active_channels() == []
 
 
-def test_api_mode_batches_stats_and_skips_notified(tmp_path):
+def test_api_mode_batches_stats_and_alerts_once(tmp_path):
     api = FakeAPI()
     api.stats = {"v1": 12000, "v2": 300}
     t = make(tmp_path, api)
@@ -104,8 +104,9 @@ def test_api_mode_batches_stats_and_skips_notified(tmp_path):
     assert api.video_calls == [["v1", "v2"]]
     api.stats["v2"] = 6000
     assert yt.scan_once() == 1
-    # v1 was already announced, so its stats are not fetched again.
-    assert api.video_calls[-1] == ["v2"]
+    # Every video is re-read for the report, but v1 is not announced again.
+    assert api.video_calls[-1] == ["v1", "v2"]
+    assert yt.scan_once() == 0
 
 
 def test_api_fills_in_when_rss_is_full(tmp_path):
@@ -177,7 +178,9 @@ def test_run_once_scans_youtube_without_facebook(tmp_path):
     t.youtube.add_channel(CH)
     import threading
     t.run(threading.Event(), once=True)
-    assert len(t.telegram.sent) == 1
+    # One threshold alert, then the views report.
+    assert len(t.telegram.sent) == 2
+    assert "Báo cáo view" in t.telegram.sent[1]
 
 
 SAMPLE_FEED = """<?xml version="1.0" encoding="UTF-8"?>

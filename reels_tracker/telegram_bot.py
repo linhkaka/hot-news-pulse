@@ -3,6 +3,7 @@
 import logging
 import threading
 import time
+from datetime import datetime
 
 import requests
 
@@ -22,6 +23,8 @@ COMMANDS = [
     ("removeyt", "Bỏ kênh YouTube: /removeyt <channel_id>"),
     ("threshold", "Đổi ngưỡng view: /threshold 5000"),
     ("interval", "Đổi thời gian quét: /interval 30 (phút)"),
+    ("report", "Báo cáo view lần quét gần nhất (/report on|off)"),
+    ("export", "Tải file Excel lịch sử view: /export 7 (ngày)"),
     ("top", "Top Reels/video nhiều view nhất"),
     ("scan", "Quét ngay"),
     ("help", "Hướng dẫn"),
@@ -51,6 +54,29 @@ class Telegram:
         # Telegram rejects messages longer than 4096 characters.
         with self._send_lock:
             self._call("sendMessage", {"chat_id": chat_id or self.chat_id, "text": text[:4096]})
+
+    def send_long(self, text, limit=4000):
+        """Send text of any length, split at line breaks into several messages."""
+        chunk = ""
+        for line in text.split("\n"):
+            if chunk and len(chunk) + len(line) + 1 > limit:
+                self.send(chunk)
+                chunk = ""
+            chunk = f"{chunk}\n{line}" if chunk else line
+        if chunk:
+            self.send(chunk)
+
+    def send_document(self, filename, content, caption=""):
+        with self._send_lock:
+            resp = self.session.post(
+                f"{self.api}/sendDocument",
+                data={"chat_id": self.chat_id, "caption": caption},
+                files={"document": (filename, content)},
+                timeout=60,
+            )
+        data = resp.json()
+        if not data.get("ok"):
+            raise TelegramError(f"Telegram sendDocument failed: {data.get('description')}")
 
     def get_updates(self, offset, timeout=50):
         return self._call(
@@ -146,6 +172,27 @@ class CommandBot:
                 f"{i}. {icon} {views:,} view — {source}\n   {link}"
                 for i, (icon, views, link, source) in enumerate(rows[:10], 1)
             )
+        if command == "report":
+            if args and args[0].lower() in ("on", "off"):
+                t.store.set_setting("auto_report", "1" if args[0].lower() == "on" else "0")
+                return ("✅ Sẽ gửi báo cáo sau mỗi lần quét." if args[0].lower() == "on"
+                        else "🔕 Tắt báo cáo tự động. Gõ /report để xem khi cần.")
+            text = t.store.get_setting("last_report")
+            if not text:
+                return "Chưa có báo cáo. Đợi lần quét đầu tiên hoặc gõ /scan."
+            t.telegram.send_long(text)
+            return None
+        if command == "export":
+            days = int(args[0]) if args and args[0].isdigit() and int(args[0]) > 0 else 7
+            content, count = t.export_csv(days)
+            if not count:
+                return "Chưa có dữ liệu lịch sử. Đợi lần quét đầu tiên hoặc gõ /scan."
+            stamp = datetime.now().strftime("%Y%m%d_%H%M")
+            t.telegram.send_document(
+                f"lich_su_view_{stamp}.csv", content,
+                f"📁 Lịch sử view {days} ngày gần nhất ({count} dòng). Mở bằng Excel/Google Sheets.",
+            )
+            return None
         if command == "interval":
             if not args or not args[0].isdigit() or not 1 <= int(args[0]) <= 1440:
                 minutes = t.scan_interval() / 60

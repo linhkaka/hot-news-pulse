@@ -51,6 +51,18 @@ class Store:
                     updated_at TEXT,
                     notified_at TEXT
                 );
+                CREATE TABLE IF NOT EXISTS snapshots (
+                    scanned_at TEXT,
+                    platform TEXT,
+                    source_id TEXT,
+                    source_name TEXT,
+                    item_id TEXT,
+                    title TEXT,
+                    link TEXT,
+                    published_at TEXT,
+                    views INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS snapshots_time ON snapshots (scanned_at);
                 CREATE TABLE IF NOT EXISTS reels (
                     reel_id TEXT PRIMARY KEY,
                     page_id TEXT,
@@ -207,4 +219,36 @@ class Store:
             "LEFT JOIN yt_channels c ON c.channel_id = v.channel_id "
             "ORDER BY v.views DESC LIMIT ?",
             (limit,),
+        )
+
+    # --- view history ---------------------------------------------------------
+
+    def last_views(self, platform, item_id):
+        """Views recorded at the previous scan, or None for a video not seen before."""
+        table, key = ("reels", "reel_id") if platform == "facebook" else ("yt_videos", "video_id")
+        rows = self._execute(f"SELECT views FROM {table} WHERE {key} = ?", (item_id,))
+        return rows[0][0] if rows else None
+
+    def source_scanned_before(self, platform, source_id):
+        return self.get_setting(f"scanned:{platform}:{source_id}") is not None
+
+    def mark_source_scanned(self, platform, source_id):
+        self.set_setting(f"scanned:{platform}:{source_id}", _now())
+
+    def add_snapshots(self, rows):
+        with self.lock:
+            self.conn.executemany(
+                "INSERT INTO snapshots VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)", rows
+            )
+            self.conn.commit()
+
+    def prune_snapshots(self, older_than_iso):
+        self._execute("DELETE FROM snapshots WHERE scanned_at < ?", (older_than_iso,))
+
+    def snapshots_since(self, since_iso):
+        return self._execute(
+            "SELECT scanned_at, platform, source_id, source_name, item_id, title, link, "
+            "published_at, views FROM snapshots WHERE scanned_at >= ? "
+            "ORDER BY scanned_at, platform, source_name, views DESC",
+            (since_iso,),
         )
