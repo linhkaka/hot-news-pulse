@@ -207,3 +207,43 @@ def test_usage_header_parsing():
     header = '{"call_count": 12, "total_time": 85, "total_cputime": 3}'
     assert graph_mod._max_usage_percent(header) == 85
     assert graph_mod._max_usage_percent(None) == 0
+
+
+def test_addall_adds_every_managed_page(tmp_path):
+    g = FakeGraph(managed={"1": ("Page X", "t1"), "2": ("Page Y", "t2")})
+    t = make_tracker(tmp_path, g)
+    bot = CommandBot(t.telegram, t)
+    assert "Đã thêm 2 Page" in bot.handle("/addall")
+    assert "đã được theo dõi" in bot.handle("/addall")
+    assert len(t.store.active_pages()) == 3
+
+
+def test_many_pages_scanned_in_parallel(tmp_path):
+    reels = [{"id": "r1", "permalink_url": "/reel/r1"}]
+    g = FakeGraph(reels, {"r1": 7000}, managed={str(i): (f"P{i}", "t") for i in range(20)})
+    t = make_tracker(tmp_path, g)
+    t.add_all_pages()
+    t.scan_once()
+    # 20 managed Pages + the one seeded from config, all scanned by the worker pool.
+    assert "21 Page" in t.last_scan_result
+    assert t.telegram.sent
+
+
+def test_old_reels_use_slow_lane(tmp_path):
+    old = (datetime.now(timezone.utc) - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%S+0000")
+    new = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S+0000")
+    reels = [{"id": "old", "created_time": old}, {"id": "new", "created_time": new}]
+
+    class CountingGraph(FakeGraph):
+        calls = []
+
+        def reel_views(self, reel_id, token, metrics):
+            self.calls.append(reel_id)
+            return 10
+
+    g = CountingGraph(reels)
+    t = make_tracker(tmp_path, g)
+    t.scan_once()
+    t.scan_once()
+    assert g.calls.count("new") == 2
+    assert g.calls.count("old") == 1  # re-checked only after slow_check_interval_seconds

@@ -1,9 +1,10 @@
 """Facebook Reels + YouTube -> Telegram tracker (official APIs only).
 
 Polls the Reels of Facebook Pages you manage (Graph API) and the videos of
-YouTube channels (YouTube Data API), and sends the link to a Telegram chat
-the first time a Reel or video crosses the view threshold. The tracker is
-also controlled from Telegram (/add, /addyt, /threshold, /top, /status ...).
+YouTube channels (RSS feed + optional YouTube Data API), and sends the link
+to a Telegram chat the first time a Reel or video crosses the view threshold.
+Pages and channels are scanned in parallel. The tracker is also controlled
+from Telegram (/add, /addall, /addyt, /threshold, /top, /status ...).
 
 Usage:
     python tracker.py                   # run forever (bot + scanner)
@@ -16,6 +17,7 @@ import logging
 import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -79,7 +81,7 @@ class Tracker:
     def __init__(self, cfg, graph, telegram, store, clock=time.time):
         self.cfg = cfg
         self.facebook_enabled = facebook_enabled(cfg)
-        self.youtube = None  # YouTubeScanner, set when a YouTube API key is configured
+        self.youtube = None  # YouTubeScanner, set in main()
         self.fb_next_due = 0
         self.graph = graph
         self.telegram = telegram
@@ -95,6 +97,8 @@ class Tracker:
         self._token_alert_sent = False
         self._last_token_check = None
         self._warned_missing = set()
+        # reel_id -> clock() of the last view check, for the slow lane of older Reels.
+        self._last_checked = {}
 
     def threshold(self):
         return int(self.store.get_setting("view_threshold", self.cfg["view_threshold"]))
@@ -154,6 +158,25 @@ class Tracker:
         self.scan_requested.set()
         return f"✅ Đã thêm {name} ({page_id})"
 
+    def add_all_pages(self):
+        if not self.facebook_enabled:
+            return FB_DISABLED
+        try:
+            managed = self.managed_pages(force=True)
+        except GraphAPIError as e:
+            return f"❌ Lỗi Facebook API: {e}"
+        if not managed:
+            return "Token hiện tại không quản lý Page nào."
+        tracked = {pid for pid, _, _ in self.store.active_pages()}
+        added = [(pid, name) for pid, (name, _) in managed.items() if pid not in tracked]
+        for page_id, name in added:
+            self.store.add_page(page_id, name)
+            self._warned_missing.discard(page_id)
+        self.scan_requested.set()
+        if not added:
+            return f"Tất cả {len(managed)} Page bạn quản lý đã được theo dõi."
+        return f"✅ Đã thêm {len(added)} Page:\n" + "\n".join(f"• {n} ({pid})" for pid, n in added)
+
     def my_pages_text(self):
         if not self.facebook_enabled:
             return FB_DISABLED
@@ -168,7 +191,7 @@ class Tracker:
         for page_id, (name, _) in sorted(managed.items(), key=lambda kv: kv[1][0]):
             mark = "✅" if page_id in tracked else "➕"
             lines.append(f"{mark} {name} — {page_id}")
-        lines.append("\nThêm Page: /add <page_id>")
+        lines.append("\nThêm 1 Page: /add <page_id> — thêm tất cả: /addall")
         return "\n".join(lines)
 
     def status_text(self):
@@ -185,14 +208,7 @@ class Tracker:
 
     def _youtube_status_lines(self):
         yt = self.youtube
-        lines = [
-            "",
-            "▶️ YouTube",
-            f"Kênh đang theo dõi: {len(self.store.active_channels())}",
-            f"Quét mỗi: {self.cfg['youtube_poll_interval_seconds']} giây",
-            f"Đã gửi thông báo: {self.store.yt_notified_count()} video",
-            f"Ước tính quota: ~{yt.estimated_daily_quota():,}/10,000 mỗi ngày",
-        ]
+        lines = ["", "▶️ YouTube", *yt.status_lines()]
         if yt.last_scan_at:
             lines.append(f"Lần quét gần nhất: {format_time(yt.last_scan_at)} ({yt.last_scan_result})")
         else:
@@ -256,42 +272,82 @@ class Tracker:
             except (TelegramError, requests.RequestException) as e:
                 log.warning("Could not send expiry warning: %s", e)
 
+    def _due_for_check(self, reel):
+        """Reels older than `fresh_hours` are re-checked at most every slow interval."""
+        created = parse_fb_time(reel.get("created_time"))
+        age_hours = (datetime.now(timezone.utc) - created).total_seconds() / 3600 if created else 0
+        if age_hours <= self.cfg["fresh_hours"]:
+            return True
+        last = self._last_checked.get(reel["id"])
+        return last is None or self.clock() - last >= self.cfg["slow_check_interval_seconds"]
+
+    def _scan_page(self, page, since, threshold, now, abort):
+        """Check one Page; returns (alerts sent, Reels checked, Reel ids seen)."""
+        page_id, page_name, token = page
+        try:
+            reels = self.graph.recent_reels(page_id, token, since)
+        except (RateLimitError, TokenError):
+            abort.set()
+            raise
+        except GraphAPIError as e:
+            log.error("Could not list Reels for %s: %s", page_name, e)
+            return 0, 0, set()
+        log.debug("%s: %d recent Reels", page_name, len(reels))
+        sent = checked = 0
+        seen = {reel["id"] for reel in reels}
+        for reel in reels:
+            if abort.is_set():
+                break
+            if self.store.was_notified(reel["id"]) or not self._due_for_check(reel):
+                continue
+            try:
+                views = self.graph.reel_views(reel["id"], token, self.cfg["view_metrics"])
+            except (RateLimitError, TokenError):
+                abort.set()
+                raise
+            self._last_checked[reel["id"]] = self.clock()
+            checked += 1
+            if views is None:
+                log.debug("No view metric for Reel %s", reel["id"])
+                continue
+            link = reel_link(reel)
+            self.store.save_reel(reel["id"], page_id, link, reel.get("description"), views)
+            if views < threshold:
+                continue
+            try:
+                self.telegram.send(format_message(page_name, reel, views, threshold, now))
+            except (TelegramError, requests.RequestException) as e:
+                log.error("Telegram send failed for Reel %s: %s", reel["id"], e)
+                continue
+            self.store.mark_notified(reel["id"], page_id, views, link)
+            sent += 1
+            log.info("Notified Reel %s (%d views)", reel["id"], views)
+        return sent, checked, seen
+
     def scan_once(self):
         now = datetime.now(timezone.utc)
         since = now - timedelta(days=self.cfg["max_reel_age_days"])
         threshold = self.threshold()
         sent = checked = 0
+        seen = set()
+        abort = threading.Event()
         try:
             pages = self.pages_with_tokens()
-            for page_id, page_name, token in pages:
-                try:
-                    reels = self.graph.recent_reels(page_id, token, since)
-                except (RateLimitError, TokenError):
-                    raise
-                except GraphAPIError as e:
-                    log.error("Could not list Reels for %s: %s", page_name, e)
-                    continue
-                log.info("%s: %d recent Reels", page_name, len(reels))
-                for reel in reels:
-                    if self.store.was_notified(reel["id"]):
-                        continue
-                    views = self.graph.reel_views(reel["id"], token, self.cfg["view_metrics"])
-                    checked += 1
-                    if views is None:
-                        log.debug("No view metric for Reel %s", reel["id"])
-                        continue
-                    link = reel_link(reel)
-                    self.store.save_reel(reel["id"], page_id, link, reel.get("description"), views)
-                    if views < threshold:
-                        continue
+            fatal = None
+            with ThreadPoolExecutor(max_workers=self.cfg["workers"]) as pool:
+                futures = [pool.submit(self._scan_page, p, since, threshold, now, abort)
+                           for p in pages]
+                for future in as_completed(futures):
                     try:
-                        self.telegram.send(format_message(page_name, reel, views, threshold, now))
-                    except (TelegramError, requests.RequestException) as e:
-                        log.error("Telegram send failed for Reel %s: %s", reel["id"], e)
+                        page_sent, page_checked, page_seen = future.result()
+                    except (RateLimitError, TokenError) as e:
+                        fatal = fatal or e
                         continue
-                    self.store.mark_notified(reel["id"], page_id, views, link)
-                    sent += 1
-                    log.info("Notified Reel %s (%d views)", reel["id"], views)
+                    sent += page_sent
+                    checked += page_checked
+                    seen |= page_seen
+            if fatal:
+                raise fatal
         except RateLimitError as e:
             self.cooldown_until = self.clock() + RATE_LIMIT_COOLDOWN_SECONDS
             self.last_scan_result = "bị Facebook giới hạn tốc độ, tạm nghỉ 15 phút"
@@ -301,7 +357,7 @@ class Tracker:
             self.last_scan_result = "lỗi token Facebook"
             self._send_token_alert(
                 f"⚠️ Token Facebook không hợp lệ hoặc đã hết hạn ({e}).\n"
-                "Hãy lấy token mới (README Bước 2) rồi khởi động lại tool."
+                "Hãy lấy token mới (README Bước 2b) rồi khởi động lại tool."
             )
             return sent
         except GraphAPIError as e:
@@ -309,10 +365,12 @@ class Tracker:
             log.error("Scan failed: %s", e)
             return sent
 
+        # Forget Reels that dropped out of the time window.
+        self._last_checked = {k: v for k, v in self._last_checked.items() if k in seen}
         self._token_alert_sent = False
         self.last_scan_at = self.clock()
         self.last_scan_result = f"{len(pages)} Page, {checked} Reel, gửi {sent} thông báo"
-        log.info("Scan done: %s", self.last_scan_result)
+        log.info("Facebook scan done: %s", self.last_scan_result)
         return sent
 
     def run(self, stop_event, once=False):
@@ -366,7 +424,7 @@ def main(argv=None):
     telegram = Telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"])
     if args.test_telegram:
         try:
-            telegram.send("✅ Reels tracker: kết nối Telegram thành công!")
+            telegram.send("✅ Tracker: kết nối Telegram thành công!")
         except (TelegramError, requests.RequestException) as e:
             log.error("Không gửi được tin Telegram: %s", e)
             return 1
@@ -377,12 +435,9 @@ def main(argv=None):
     store = Store(cfg["db_path"])
     store.seed_pages(cfg["pages"])
     tracker = Tracker(cfg, graph, telegram, store)
-    if cfg["youtube_api_key"]:
-        tracker.youtube = YouTubeScanner(
-            cfg, YouTubeClient(cfg["youtube_api_key"]), store, telegram,
-            tracker.threshold, format_age,
-        )
-        tracker.youtube.seed_channels(cfg["youtube_channels"])
+    api = YouTubeClient(cfg["youtube_api_key"]) if cfg["youtube_api_key"] else None
+    tracker.youtube = YouTubeScanner(cfg, store, telegram, tracker.threshold, format_age, api=api)
+    tracker.youtube.seed_channels(cfg["youtube_channels"])
     stop = threading.Event()
 
     if args.once:
@@ -401,12 +456,12 @@ def main(argv=None):
         page_count = len(store.active_pages())
         lines.append(f"📘 Facebook: {page_count} Page")
         if not page_count:
-            lines.append("   Chưa có Page nào — gõ /mypages rồi /add <page_id>.")
-    if tracker.youtube:
-        channel_count = len(store.active_channels())
-        lines.append(f"▶️ YouTube: {channel_count} kênh")
-        if not channel_count:
-            lines.append("   Chưa có kênh nào — gõ /addyt @handle_kenh_cua_ban.")
+            lines.append("   Chưa có Page nào — gõ /addall để thêm tất cả Page bạn quản lý.")
+    channel_count = len(store.active_channels())
+    lines.append(f"▶️ YouTube: {channel_count} kênh ({tracker.youtube.mode})")
+    if not channel_count:
+        example = "@handle_kenh" if api else "UCxxxxxxxx (ID kênh)"
+        lines.append(f"   Chưa có kênh nào — gõ /addyt {example}.")
     lines.append("Gõ /help để xem lệnh.")
     try:
         telegram.send("\n".join(lines))

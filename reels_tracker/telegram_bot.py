@@ -1,9 +1,12 @@
 """Telegram: sending alerts and handling chat commands that control the tracker."""
 
 import logging
+import threading
 import time
 
 import requests
+
+from net import ThreadSessions
 
 log = logging.getLogger("reels_tracker.telegram")
 
@@ -11,6 +14,7 @@ COMMANDS = [
     ("status", "Trạng thái tool"),
     ("pages", "Danh sách Page đang theo dõi"),
     ("add", "Thêm Page: /add <page_id>"),
+    ("addall", "Thêm tất cả Page bạn quản lý"),
     ("remove", "Bỏ Page: /remove <page_id>"),
     ("mypages", "Các Page bạn quản lý (có thể /add)"),
     ("channels", "Kênh YouTube đang theo dõi"),
@@ -31,7 +35,9 @@ class Telegram:
     def __init__(self, bot_token, chat_id, session=None):
         self.api = f"https://api.telegram.org/bot{bot_token}"
         self.chat_id = str(chat_id)
-        self.session = session or requests.Session()
+        self.session = session or ThreadSessions()
+        # Scans send alerts from several threads; keep messages in order.
+        self._send_lock = threading.Lock()
 
     def _call(self, method, payload, timeout=30):
         resp = self.session.post(f"{self.api}/{method}", json=payload, timeout=timeout)
@@ -42,7 +48,8 @@ class Telegram:
 
     def send(self, text, chat_id=None):
         # Telegram rejects messages longer than 4096 characters.
-        self._call("sendMessage", {"chat_id": chat_id or self.chat_id, "text": text[:4096]})
+        with self._send_lock:
+            self._call("sendMessage", {"chat_id": chat_id or self.chat_id, "text": text[:4096]})
 
     def get_updates(self, offset, timeout=50):
         return self._call(
@@ -59,9 +66,6 @@ class Telegram:
 
 
 HELP_TEXT = "🤖 Reels & YouTube Tracker — các lệnh:\n" + "\n".join(f"/{c} — {d}" for c, d in COMMANDS)
-
-
-YT_DISABLED = "YouTube chưa bật. Thêm YOUTUBE_API_KEY vào file .env rồi chạy lại tool."
 
 
 class CommandBot:
@@ -92,6 +96,8 @@ class CommandBot:
             )
         if command == "mypages":
             return t.my_pages_text()
+        if command == "addall":
+            return t.add_all_pages()
         if command == "add":
             if not args:
                 return "Cách dùng: /add <page_id>  (xem ID bằng /mypages)"
@@ -104,25 +110,20 @@ class CommandBot:
                 for pid in args
             )
         if command == "channels":
-            if not t.youtube:
-                return YT_DISABLED
             channels = t.store.active_channels()
             if not channels:
-                return "Chưa theo dõi kênh YouTube nào. Dùng /addyt @handle."
+                return "Chưa theo dõi kênh YouTube nào. Dùng /addyt @handle hoặc /addyt UC..."
             return "▶️ Kênh YouTube đang theo dõi:\n" + "\n".join(
                 f"• {title} ({cid})" for cid, title, _ in channels
             )
         if command == "addyt":
-            if not t.youtube:
-                return YT_DISABLED
             if not args:
-                return "Cách dùng: /addyt @handle  (hoặc ID kênh UC..., hoặc link kênh)"
+                return ("Cách dùng: /addyt @handle  (hoặc ID kênh UC..., hoặc link kênh)\n"
+                        "Thêm nhiều kênh: /addyt UCaaa UCbbb")
             replies = [t.youtube.add_channel(arg) for arg in args]
             t.scan_requested.set()
             return "\n".join(replies)
         if command == "removeyt":
-            if not t.youtube:
-                return YT_DISABLED
             if not args:
                 return "Cách dùng: /removeyt <channel_id>  (xem ID bằng /channels)"
             return "\n".join(

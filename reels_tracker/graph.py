@@ -7,6 +7,8 @@ from datetime import datetime
 
 import requests
 
+from net import ThreadSessions
+
 log = logging.getLogger("reels_tracker.graph")
 
 # https://developers.facebook.com/docs/graph-api/overview/rate-limiting
@@ -59,7 +61,7 @@ def _max_usage_percent(header_value):
 class GraphClient:
     def __init__(self, version, session=None, retries=3, backoff_seconds=2.0, sleep=time.sleep):
         self.base = f"https://graph.facebook.com/{version}"
-        self.session = session or requests.Session()
+        self.session = session or ThreadSessions()
         self.retries = retries
         self.backoff_seconds = backoff_seconds
         self.sleep = sleep

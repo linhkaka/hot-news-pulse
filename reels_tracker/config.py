@@ -11,7 +11,8 @@ DEFAULTS = {
     "telegram_bot_token": "",
     "telegram_chat_id": "",
     "view_threshold": 5000,
-    "poll_interval_seconds": 120,
+    # Near-realtime defaults: scan every minute.
+    "poll_interval_seconds": 60,
     "max_reel_age_days": 7,
     # Tried in order; the first metric the API returns a value for is used.
     "view_metrics": ["fb_reels_total_plays", "blue_reels_play_count"],
@@ -19,8 +20,15 @@ DEFAULTS = {
     "youtube_api_key": "",
     # Channel IDs (UC...), @handles or channel URLs.
     "youtube_channels": [],
-    # YouTube's free quota is 10,000 units/day, so poll less often than Facebook.
-    "youtube_poll_interval_seconds": 300,
+    # New videos come from the free RSS feed; with an API key, view counts cost
+    # 1 quota unit per 50 videos per scan (free quota: 10,000 units/day).
+    "youtube_poll_interval_seconds": 60,
+    # Pages/channels scanned in parallel.
+    "workers": 5,
+    # Reels older than this are re-checked only every slow_check_interval_seconds,
+    # which keeps Graph API usage low when many Pages are tracked.
+    "fresh_hours": 24,
+    "slow_check_interval_seconds": 600,
     # Warn on Telegram when the Facebook token expires within this many days.
     "token_warning_days": 7,
 }
@@ -35,6 +43,7 @@ ENV_OVERRIDES = {
     "DB_PATH": "db_path",
     "YOUTUBE_API_KEY": "youtube_api_key",
     "YOUTUBE_POLL_INTERVAL_SECONDS": "youtube_poll_interval_seconds",
+    "WORKERS": "workers",
 }
 
 INT_KEYS = (
@@ -43,6 +52,9 @@ INT_KEYS = (
     "max_reel_age_days",
     "token_warning_days",
     "youtube_poll_interval_seconds",
+    "workers",
+    "fresh_hours",
+    "slow_check_interval_seconds",
 )
 
 
@@ -94,8 +106,5 @@ def load_config(path):
     missing = [k for k in ("telegram_bot_token", "telegram_chat_id") if not cfg[k]]
     if missing:
         raise ValueError(f"Thiếu cấu hình bắt buộc: {', '.join(missing)}")
-    if not facebook_enabled(cfg) and not cfg["youtube_api_key"]:
-        raise ValueError(
-            "Cần ít nhất một nguồn: FB_USER_ACCESS_TOKEN (Facebook) hoặc YOUTUBE_API_KEY (YouTube)"
-        )
+    cfg["workers"] = max(1, cfg["workers"])
     return cfg
