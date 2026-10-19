@@ -1,0 +1,16 @@
+{
+  "pages": [
+    { "id": "123456789012345", "name": "Page A" },
+    { "id": "987654321098765", "name": "Page B" }
+  ],
+  "youtube_channels": ["UCxxxxxxxxxxxxxxxxxxxxxx", "@kenh_cua_ban"],
+  "view_threshold": 5000,
+  "poll_interval_seconds": 1800,
+  "youtube_poll_interval_seconds": 1800,
+  "workers": 5,
+  "fresh_hours": 24,
+  "slow_check_interval_seconds": 600,
+  "max_reel_age_days": 7,
+  "token_warning_days": 7,
+  "graph_api_version": "v23.0"
+}

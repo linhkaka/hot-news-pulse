@@ -1,0 +1,19 @@
+# Chạy tool như service trên Linux (tự khởi động cùng máy, tự chạy lại khi lỗi).
+# 1. Sửa User và WorkingDirectory cho đúng
+# 2. sudo cp deploy/reels-tracker.service /etc/systemd/system/
+# 3. sudo systemctl daemon-reload && sudo systemctl enable --now reels-tracker
+# Xem log: journalctl -u reels-tracker -f
+[Unit]
+Description=Facebook Reels + YouTube -> Telegram tracker
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/hot-news-pulse/reels_tracker
+ExecStart=/home/ubuntu/hot-news-pulse/reels_tracker/.venv/bin/python tracker.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

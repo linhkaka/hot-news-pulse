@@ -1,0 +1,308 @@
+# Reels & YouTube Tracker → Telegram
+
+Tool chạy 24/7, tự động quét danh sách **Facebook Fanpage** và **kênh YouTube** bạn đưa vào
+**mỗi 30 phút** (đổi được thành 60 phút bằng lệnh `/interval 60`). Mỗi lần quét:
+
+1. **Cập nhật số view mới nhất** của từng video trên từng Page/kênh và lưu lại lịch sử.
+2. Gửi **báo cáo** về Telegram: tổng view mỗi Page/kênh, **tăng bao nhiêu so với lần quét
+   trước**, các video tăng mạnh nhất kèm link.
+3. Video/Reel nào **vượt 5.000 view** (ngưỡng tùy chỉnh) thì báo riêng ngay — mỗi video 1 lần.
+
+Lịch sử view xuất ra file Excel bằng lệnh `/export`.
+Bạn điều khiển tool ngay trong Telegram: thêm/bỏ kênh, đổi ngưỡng, xem báo cáo…
+
+Ví dụ báo cáo sau mỗi lần quét:
+
+```
+📊 Báo cáo view — 14:30 19/10/2026
+(số trong ngoặc = tăng so với lần quét trước)
+
+📘 Facebook
+• Page Bán Hàng — 9,600 view (+2,400) · 2 video
+   ↑ 8,100 (+2,100) — Clip review sản phẩm
+     https://www.facebook.com/reel/...
+
+▶️ YouTube
+• Kênh Demo — 9,410 view (+1,333) · 2 video
+   ↑ 9,100 (+1,323) — Short hot
+     https://www.youtube.com/shorts/...
+
+Tổng cộng: 19,010 view (+3,733)
+```
+
+> "View của Page/kênh" = tổng view các video đăng trong **7 ngày gần nhất**
+> (đổi bằng `MAX_VIDEO_AGE_DAYS`, ví dụ 30).
+
+Tool chỉ dùng **nguồn chính thức** (YouTube RSS, YouTube Data API, Facebook Graph API):
+không scrape, không cookie, không proxy → không làm tài khoản bị khóa.
+
+| | YouTube | Facebook Reels |
+|---|---|---|
+| Cần gì | Không cần gì (RSS) — API key là tùy chọn | Token Facebook |
+| Theo dõi được | Mọi kênh công khai | Chỉ Page bạn là admin / có quyền quản lý |
+| Tần suất quét | 30 phút/lần (mặc định) | 30 phút/lần (mặc định) |
+
+> ⏱ Đổi tần suất ngay trong Telegram: `/interval 30` (30 phút) hoặc `/interval 60` (1 giờ).
+> Áp dụng cho cả Facebook và YouTube, giữ nguyên sau khi khởi động lại.
+> Quét thưa như vậy gần như không tốn quota/API và không bao giờ bị giới hạn.
+
+---
+
+## Tính năng
+
+- ⏱ Quét mỗi 30 phút (đổi bằng `/interval`), **nhiều Page/kênh song song** (mặc định 5 luồng)
+- 📊 Báo cáo view sau mỗi lần quét (bật/tắt bằng `/report on|off`), lưu lịch sử 30 ngày,
+  xuất Excel bằng `/export`
+- 📥 YouTube: phát hiện video mới bằng RSS miễn phí; có API key thì lấy số view
+  của **50 video chỉ tốn 1 đơn vị quota** → theo dõi được hàng trăm kênh
+- 🐢 Facebook: Reels mới (< 24 giờ) kiểm tra mỗi lần quét; Reels cũ hơn kiểm tra 10 phút/lần
+  → tiết kiệm API, tránh bị giới hạn khi có nhiều Fanpage
+- 🔥 Tin báo gồm: kênh/Page, tiêu đề hoặc caption, số view, đăng cách đây bao lâu, link
+  (Shorts có link `/shorts/` chuẩn)
+- 🤖 Điều khiển bằng lệnh Telegram; `/addall` thêm **tất cả** Fanpage bạn quản lý 1 lần
+- 💾 Ghi nhớ video đã báo (SQLite) → không báo trùng, kể cả khi khởi động lại
+- 🛡 Hết quota YouTube → tự nghỉ 1 giờ; Facebook giới hạn tốc độ → tự nghỉ 15 phút
+- ⏰ Báo ngay khi API key / token hỏng, nhắc trước khi token Facebook hết hạn
+- 🔒 Chỉ trả lời lệnh từ đúng chat bạn cấu hình — người lạ nhắn bot sẽ bị bỏ qua
+
+## Lệnh Telegram
+
+| Lệnh | Tác dụng |
+|---|---|
+| `/status` | Trạng thái: số kênh/Page, ngưỡng, lần quét gần nhất, quota |
+| `/report` | Xem lại báo cáo view của lần quét gần nhất |
+| `/report off` / `/report on` | Tắt / bật gửi báo cáo tự động sau mỗi lần quét (vẫn quét và lưu lịch sử) |
+| `/export` | Nhận file Excel (CSV) lịch sử view 7 ngày; `/export 30` = 30 ngày |
+| `/addyt <kênh>` | Thêm kênh YouTube: ID `UC...`, link kênh, hoặc `@handle` (cần API key). Thêm nhiều: `/addyt UCaaa UCbbb` |
+| `/removeyt <channel_id>` | Bỏ theo dõi kênh YouTube |
+| `/channels` | Danh sách kênh YouTube đang theo dõi (kèm ID) |
+| `/addall` | Thêm **tất cả** Facebook Page bạn quản lý |
+| `/mypages` | Liệt kê các Facebook Page bạn quản lý (kèm ID) |
+| `/add <page_id>` | Thêm 1 Facebook Page (thêm nhiều: `/add 111 222`) |
+| `/remove <page_id>` | Bỏ theo dõi Facebook Page |
+| `/pages` | Danh sách Facebook Page đang theo dõi |
+| `/threshold 5000` | Đổi ngưỡng view (dùng chung cho YouTube và Facebook) |
+| `/interval 30` | Đổi thời gian giữa 2 lần quét, tính bằng phút (`/interval 60` = 1 giờ) |
+| `/top` | Top 10 video/Reels nhiều view nhất |
+| `/scan` | Quét ngay, không đợi |
+| `/help` | Danh sách lệnh |
+
+---
+
+## Bước 1 — Tạo Telegram bot (bắt buộc)
+
+1. Mở Telegram, chat với **@BotFather** → gõ `/newbot` → đặt tên.
+2. BotFather trả về **token** dạng `123456:ABC...` → đây là `TELEGRAM_BOT_TOKEN`.
+3. Nhắn 1 tin bất kỳ cho bot vừa tạo (bấm **Start**).
+4. Mở trình duyệt: `https://api.telegram.org/bot<TOKEN>/getUpdates`
+   → tìm `"chat":{"id":123456789` → số đó là `TELEGRAM_CHAT_ID`.
+   (Muốn nhận trong group: thêm bot vào group, nhắn 1 tin trong group; id group là số âm.)
+
+## Bước 2a — YouTube
+
+**Không cần làm gì** nếu dùng RSS miễn phí. Chỉ cần ID kênh:
+mở kênh YouTube → bấm vào phần mô tả kênh (*…thêm*) → **Chia sẻ kênh** →
+**Sao chép mã kênh**. ID có dạng `UCxxxxxxxxxxxxxxxxxxxxxx`.
+
+**Nên có API key (miễn phí)** để số view cập nhật nhanh hơn và thêm kênh bằng `@handle`:
+
+1. Vào <https://console.cloud.google.com/> → đăng nhập Google → tạo **Project** mới.
+2. **APIs & Services → Library** → tìm **YouTube Data API v3** → **Enable**.
+3. **APIs & Services → Credentials** → **Create credentials → API key**.
+4. Copy key → đây là `YOUTUBE_API_KEY`. (Nên bấm *Restrict key* → chỉ cho *YouTube Data API v3*.)
+
+Quota miễn phí 10.000 đơn vị/ngày. Mỗi lần quét tốn khoảng **1 đơn vị cho mỗi 50 video**
+đang theo dõi → quét 30 phút/lần chỉ tốn khoảng 50–200 đơn vị/ngày. `/status` cho biết
+quota đã dùng hôm nay.
+
+## Bước 2b — Facebook (nếu theo dõi Fanpage)
+
+1. Vào <https://developers.facebook.com/> → **My Apps** → **Create App** (loại *Business*).
+2. Mở **Graph API Explorer**: <https://developers.facebook.com/tools/explorer/>
+3. Chọn app vừa tạo → **Generate Access Token** → tick các quyền:
+   `pages_show_list`, `pages_read_engagement`, `read_insights`
+4. Đổi sang **token dài hạn (60 ngày)**: dán token vào
+   [Access Token Debugger](https://developers.facebook.com/tools/debug/accesstoken/) → *Extend Access Token*.
+5. Đây là `FB_USER_ACCESS_TOKEN`. Chạy tool xong gõ `/addall` để theo dõi mọi Page bạn quản lý.
+
+> 💡 **Hệ thống nhiều Fanpage:** dùng *System User* trong Business Manager — token
+> **không bao giờ hết hạn** và gán được cho tất cả Page của doanh nghiệp
+> (Business Settings → Users → System Users → thêm Page → Generate Token với các quyền trên).
+>
+> Page của đối tác: nhờ họ thêm tài khoản bạn làm người quản lý (vai trò *Analyst* trở lên).
+
+## Bước 3 — Chạy tool
+
+Chọn **một** trong các cách sau. Không muốn bật máy tính 24/7 → dùng **Cách D (GitHub Actions)**.
+
+### ⭐ Cách D — Chạy miễn phí trên GitHub Actions (không cần bật máy tính)
+
+GitHub tự chạy tool **mỗi 30 phút** trên máy chủ của họ. Tắt máy tính vẫn nhận báo cáo.
+Mọi bước làm trên **trình duyệt**.
+
+**1. Đưa code lên nhánh chính (`main`).** Lịch tự chạy chỉ hoạt động trên nhánh chính:
+mở Pull Request của tool trên GitHub → bấm **Merge pull request** → **Confirm merge**.
+
+**2. Dán token vào GitHub (an toàn, không ai xem được):**
+vào repo trên GitHub → **Settings** → **Secrets and variables** → **Actions** →
+tab **Secrets** → **New repository secret**, tạo lần lượt:
+
+| Name | Secret (giá trị) | Bắt buộc? |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Token bot từ @BotFather | ✅ |
+| `TELEGRAM_CHAT_ID` | Chat ID của bạn | ✅ |
+| `YOUTUBE_API_KEY` | API key YouTube (Bước 2a) | Không |
+| `FB_USER_ACCESS_TOKEN` | Token Facebook (Bước 2b) | Không |
+
+(Không bắt buộc) tab **Variables** → **New repository variable**: `YT_CHANNELS` (ID kênh, cách
+nhau dấu phẩy), `FB_PAGE_IDS`, `VIEW_THRESHOLD`. Có thể bỏ qua và thêm kênh bằng lệnh Telegram.
+
+**3. Bật và chạy thử:** tab **Actions** → nếu GitHub hỏi thì bấm
+**I understand my workflows, go ahead and enable them** → chọn **View tracker** bên trái →
+**Run workflow** → **Run workflow**. Khoảng 1 phút sau, dấu ✅ xanh và Telegram nhận tin.
+
+**4. Thêm kênh:** nhắn bot `/addyt UCxxxx` (YouTube) hoặc `/addall` (Facebook).
+
+Từ đó GitHub tự chạy mỗi 30 phút. Lưu ý:
+
+- ⏳ Lệnh Telegram được trả lời ở **lần chạy kế tiếp** (chậm tối đa ~30 phút, bấm
+  **Run workflow** để chạy ngay). Lệnh thêm kênh/Page và `/scan` sẽ quét luôn ở lần chạy đó.
+- ⏱ GitHub đôi khi chạy trễ vài phút đến vài chục phút so với lịch — bình thường.
+- `/interval 60` hoạt động (bỏ qua các lần chạy chưa đủ 60 phút). Không chạy dày hơn 30 phút.
+- 💰 Repo **public**: miễn phí không giới hạn. Repo **private**: 2.000 phút miễn phí/tháng,
+  tool dùng khoảng 1.500 phút/tháng (mỗi lần ~1 phút).
+- ❌ Nếu lần chạy có dấu ✗ đỏ (ví dụ token sai), GitHub gửi email cho bạn; bấm vào lần chạy
+  → **scan** → xem bước **Handle Telegram commands, scan and report** để đọc lỗi.
+- 💤 Repo public không có hoạt động gì trong 60 ngày thì GitHub tạm tắt lịch chạy và gửi email
+  báo — chỉ cần vào tab Actions bấm **Enable workflow**.
+- Dữ liệu (kênh đã thêm, lịch sử view) được GitHub lưu giữa các lần chạy. Không chạy song song
+  bản trên máy tính với cùng bot Telegram (hai nơi sẽ tranh nhau đọc lệnh).
+
+### Cách A — Windows (dễ nhất)
+
+1. Cài Python 3.10+ từ <https://www.python.org/downloads/> (nhớ tick **Add Python to PATH**).
+2. Nhấp đúp `run_windows.bat`. Lần đầu nó tự cài thư viện và mở file `.env` →
+   điền token → lưu → nhấp đúp `run_windows.bat` lần nữa.
+3. Telegram sẽ nhận tin "🚀 Tracker đã chạy". Gõ `/addyt UC...` và/hoặc `/addall`.
+
+Để cửa sổ mở thì tool chạy; tắt máy là tool dừng → muốn chạy 24/7 dùng Cách C.
+
+### Cách B — macOS / Linux
+
+```bash
+cd reels_tracker
+./run.sh          # lần đầu tạo file .env → điền token → chạy lại ./run.sh
+```
+
+### Cách C — Chạy 24/7 trên VPS bằng Docker (khuyên dùng)
+
+```bash
+cd reels_tracker
+cp .env.example .env        # điền token
+mkdir -p data
+docker compose up -d --build
+docker compose logs -f      # xem log
+```
+
+Docker tự khởi động lại tool khi lỗi hoặc khi VPS reboot. Dữ liệu nằm trong thư mục `data/`.
+Một VPS rẻ nhất (1 CPU, 1 GB RAM) là đủ.
+
+Không dùng Docker? Có file mẫu `deploy/reels-tracker.service` để chạy bằng systemd.
+
+---
+
+## Cấu hình
+
+Cấu hình cơ bản nằm trong file **`.env`** (xem `.env.example`):
+
+| Biến | Ý nghĩa | Mặc định |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Token từ BotFather | bắt buộc |
+| `TELEGRAM_CHAT_ID` | Chat/group nhận thông báo và được quyền ra lệnh | bắt buộc |
+| `YOUTUBE_API_KEY` | API key YouTube (Bước 2a) | trống = chỉ dùng RSS |
+| `YT_CHANNELS` | Kênh YouTube, cách nhau dấu phẩy (hoặc dùng `/addyt`) | trống |
+| `YOUTUBE_POLL_INTERVAL_SECONDS` | Bao lâu quét YouTube 1 lần (giây) | `1800` (30 phút) |
+| `FB_USER_ACCESS_TOKEN` | Token Facebook (Bước 2b) | trống = tắt Facebook |
+| `FB_PAGE_IDS` | Page ID cách nhau dấu phẩy (hoặc dùng `/addall`, `/add`) | trống |
+| `POLL_INTERVAL_SECONDS` | Bao lâu quét Facebook 1 lần (giây) | `1800` (30 phút) |
+| `VIEW_THRESHOLD` | Ngưỡng view | `5000` |
+| `WORKERS` | Số Page/kênh quét song song | `5` |
+| `MAX_VIDEO_AGE_DAYS` | Theo dõi video đăng trong N ngày gần nhất | `7` |
+| `REPORT_TOP_VIDEOS` | Số video tăng mạnh nhất liệt kê cho mỗi Page/kênh trong báo cáo | `3` |
+| `UTC_OFFSET_HOURS` | Múi giờ hiển thị trong tin nhắn (7 = Việt Nam) | `7` |
+
+Tùy chọn nâng cao trong `config.json` (copy từ `config.example.json`, không bắt buộc):
+
+| Khóa | Ý nghĩa | Mặc định |
+|---|---|---|
+| `youtube_channels` | Danh sách kênh YouTube | `[]` |
+| `pages` | `[{ "id", "name", "access_token"? }]` — `access_token` riêng nếu Page không thuộc token chính | `[]` |
+| `max_reel_age_days` | Chỉ theo dõi video/Reels đăng trong N ngày | `7` |
+| `fresh_hours` | Reels mới hơn N giờ được kiểm tra mỗi lần quét | `24` |
+| `slow_check_interval_seconds` | Reels cũ hơn kiểm tra cách nhau bao lâu | `600` |
+| `history_days` | Giữ lịch sử view (cho `/export`) bao nhiêu ngày | `30` |
+| `token_warning_days` | Nhắc trước khi token Facebook hết hạn N ngày | `7` |
+| `view_metrics` | Tên metric view Facebook, thử lần lượt | `fb_reels_total_plays`, `blue_reels_play_count` |
+| `graph_api_version` | Phiên bản Facebook Graph API | `v23.0` |
+| `db_path` | File database | `reels_tracker.db` |
+
+Ngưỡng đổi bằng `/threshold`, thời gian quét đổi bằng `/interval`, kênh/Page thêm bỏ bằng
+lệnh Telegram được lưu trong database, giữ nguyên sau khi khởi động lại (và được ưu tiên
+hơn giá trị trong `.env`).
+
+> 🔒 **Không bao giờ commit `.env` hay `config.json`** lên GitHub — đã có sẵn trong `.gitignore`.
+
+## Dòng lệnh
+
+| Lệnh | Tác dụng |
+|---|---|
+| `python tracker.py` | Chạy liên tục (bot + quét) |
+| `python tracker.py --test-telegram` | Gửi tin thử để kiểm tra Telegram |
+| `python tracker.py --once` | Quét 1 lần rồi thoát (dùng với cron) |
+| `python tracker.py --no-bot` | Chỉ quét, không nhận lệnh Telegram |
+| `python tracker.py --cron` | 1 lần chạy theo lịch: trả lời lệnh Telegram đang chờ, quét nếu đến giờ, rồi thoát (dùng cho GitHub Actions / cron) |
+| `python tracker.py -v` | In log chi tiết để tìm lỗi |
+
+## Xử lý sự cố
+
+| Hiện tượng | Cách xử lý |
+|---|---|
+| Không nhận được tin nào | Chạy `--test-telegram`. Kiểm tra đã bấm Start với bot chưa, chat ID đúng chưa. |
+| `/addyt @handle` báo cần API key | Không có key thì dùng ID kênh `UC...` (cách lấy ở Bước 2a). |
+| `/addyt` báo "Không tìm thấy kênh" | Kiểm tra lại ID / @handle. |
+| Muốn kiểm tra ngay, không đợi 30 phút | Gõ `/scan`. |
+| Số view YouTube cập nhật chậm | RSS có thể trễ. Thêm `YOUTUBE_API_KEY` để có số mới hơn. |
+| Báo "YouTube API key không dùng được" | Kiểm tra key, và đã **Enable YouTube Data API v3** chưa (Bước 2a). |
+| Báo "hết quota YouTube" | Tool tự nghỉ 1 giờ. Tăng thời gian quét bằng `/interval`. Quota reset mỗi ngày. |
+| `/add` báo "Không đọc được Page" | Tài khoản của token không phải admin Page đó, hoặc token thiếu quyền ở Bước 2b. |
+| Log báo `No view metric` (Facebook) | Chạy với `-v` để xem lỗi từng metric. Kiểm tra quyền `read_insights`. |
+| Báo "Token Facebook không hợp lệ" | Token hết hạn/đổi mật khẩu → làm lại Bước 2b, sửa `.env`, chạy lại tool. |
+| Báo "giới hạn tốc độ" (Facebook) | Tool tự nghỉ 15 phút. Nếu bị thường xuyên: tăng thời gian quét bằng `/interval` hoặc giảm `WORKERS`. |
+| Bot không trả lời lệnh | Chỉ chat có `TELEGRAM_CHAT_ID` mới được ra lệnh. Không chạy 2 bản tool cùng 1 bot. |
+
+## Lưu ý thực tế
+
+- RSS YouTube chỉ chứa **15 video mới nhất** của mỗi kênh. Kênh đăng hơn 15 video/tuần:
+  có API key thì tool tự lấy thêm qua API; không có key thì video cũ hơn sẽ bị bỏ qua.
+- Video đã báo không bị gọi lại nữa, nên rất tiết kiệm quota/API.
+- Video "sắp công chiếu" (premiere chưa diễn ra) được bỏ qua cho đến khi lên sóng.
+
+## Chạy test
+
+```bash
+pip install pytest
+python -m pytest -q
+```
+
+## Cấu trúc code
+
+| File | Vai trò |
+|---|---|
+| `tracker.py` | Chương trình chính: vòng lặp quét, quét song song các Fanpage |
+| `youtube.py` | YouTube RSS + Data API, quét kênh, gửi cảnh báo YouTube |
+| `graph.py` | Gọi Facebook Graph API, xử lý rate limit / lỗi token |
+| `telegram_bot.py` | Gửi tin Telegram và xử lý các lệnh `/...` |
+| `store.py` | Database SQLite (Page, kênh, cài đặt, video, lịch sử đã báo) |
+| `config.py` | Đọc `.env`, `config.json`, biến môi trường |
+| `report.py` | Báo cáo view mỗi lần quét, xuất file CSV |
+| `net.py` | Kết nối HTTP riêng cho từng luồng quét |
