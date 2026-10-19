@@ -1,0 +1,9 @@
+{
+  "name": "richtube-chrome",
+  "private": true,
+  "type": "module",
+  "description": "RICHTUBE Spy - Tiện ích Chrome của SNAKEMEDIA (file này chỉ dùng để chạy test, Chrome bỏ qua)",
+  "scripts": {
+    "test": "node --test"
+  }
+}

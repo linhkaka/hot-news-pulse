@@ -1,0 +1,54 @@
+# ============================================================================
+# RICHTUBE - YouTube Intelligence & Autonomous Production Engine
+# Copyright (c) Công ty TNHH SNAKEMEDIA. All rights reserved.
+#
+# Chạy cả hệ thống 24/7:   docker compose up -d --build
+# Trước đó: copy richtube-engine/.env.example thành richtube-engine/.env và điền key.
+# ============================================================================
+
+services:
+  # ---------- 1. Backend Engine (FastAPI, cổng 8000) ----------
+  richtube-api:
+    build: ./richtube-engine
+    container_name: richtube-api
+    env_file: ./richtube-engine/.env
+    environment:
+      DATA_DIR: /app/data
+    volumes:
+      - richtube-data:/app/data   # giữ kết quả phân tích khi khởi động lại
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  # ---------- 2. Telegram Bot ----------
+  richtube-bot:
+    build: ./richtube-engine
+    container_name: richtube-bot
+    command: python telegram_bot.py
+    env_file: ./richtube-engine/.env
+    environment:
+      RICHTUBE_API_URL: http://richtube-api:8000   # Bot gọi Engine qua mạng nội bộ Docker
+    depends_on:
+      - richtube-api
+    restart: unless-stopped
+
+  # ---------- 3. Web Dashboard (Next.js, cổng 3000) ----------
+  richtube-web:
+    build:
+      context: ./richtube-web
+      args:
+        # Địa chỉ mà TRÌNH DUYỆT dùng để gọi API.
+        # Máy cá nhân: giữ nguyên. VPS: đặt RICHTUBE_PUBLIC_API_URL=http://<IP-VPS>:8000
+        # trong file .env nằm cạnh file docker-compose.yml này.
+        NEXT_PUBLIC_RICHTUBE_API_URL: ${RICHTUBE_PUBLIC_API_URL:-http://localhost:8000}
+        # Chỉ cần nếu bạn bật RICHTUBE_API_KEY cho Engine
+        NEXT_PUBLIC_RICHTUBE_API_KEY: ${RICHTUBE_API_KEY:-}
+    container_name: richtube-web
+    ports:
+      - "3000:3000"
+    depends_on:
+      - richtube-api
+    restart: unless-stopped
+
+volumes:
+  richtube-data:

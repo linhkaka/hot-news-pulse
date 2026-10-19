@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "RICHTUBE Spy · SNAKEMEDIA",
+  "short_name": "RICHTUBE",
+  "version": "1.0.0",
+  "description": "Mổ xẻ video YouTube outlier ngay trên trình duyệt: Most Replayed Heatmap, Hook 30s, lỗ hổng khán giả và kịch bản 4 cột.",
+  "icons": { "16": "icons/icon16.png", "32": "icons/icon32.png", "48": "icons/icon48.png", "128": "icons/icon128.png" },
+  "action": {
+    "default_title": "RICHTUBE Spy",
+    "default_icon": { "16": "icons/icon16.png", "32": "icons/icon32.png" }
+  },
+  "side_panel": { "default_path": "sidepanel.html" },
+  "options_page": "options.html",
+  "background": { "service_worker": "background.js", "type": "module" },
+  "permissions": ["storage", "sidePanel"],
+  "host_permissions": [
+    "https://www.youtube.com/*",
+    "https://www.googleapis.com/*",
+    "https://generativelanguage.googleapis.com/*",
+    "http://localhost/*",
+    "http://127.0.0.1/*"
+  ],
+  "optional_host_permissions": ["http://*/*", "https://*/*"],
+  "content_scripts": [
+    {
+      "matches": ["https://www.youtube.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}
