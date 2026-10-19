@@ -83,6 +83,7 @@ def parse_shopify_product(data):
         "published_ts": _iso_ts(p.get("published_at")),
         "title": p.get("title"),
         "price": variants[0].get("price") if variants else None,
+        "compare_price": (variants[0].get("compare_at_price") or None) if variants else None,
     }
 
 
@@ -110,7 +111,7 @@ def _price_from_html(html):
 def check(url, client=None):
     info = {"url": url, "final_url": None, "domain": None, "platform": None, "created_ts": None,
             "published_ts": None, "title": None, "price": None, "checked_ts": int(time.time()), "error": None,
-            "date_source": None, "pod_markers": None}
+            "date_source": None, "pod_markers": None, "compare_price": None}
     own = client is None
     client = client or httpx.Client(headers={"User-Agent": UA}, follow_redirects=True, timeout=20)
     try:

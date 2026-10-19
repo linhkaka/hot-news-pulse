@@ -31,6 +31,8 @@ PRODUCTS = [
      [("advent-cozy.com", 6, [4, 3, 2, 1, 1, 0]), ("memorialgift.co", 2, [1, 0])], 0),
     ("Veteran Truck Flag 🇺🇸 Proud army veteran", "34.99", 3, None,
      [("moto-loud.com", 2, [3, 2])], 0),
+    ("Grandma's Garden Flag 🌻 Personalized with grandkids names", "24.99", 60, 58,
+     [("flagcraft.co", 3, [55, 40, 25, 18, 3]), ("yardjoy.shop", 2, [35, 22, 10]), ("porchpride.com", 2, [28, 16])], 6),
 ]
 
 
@@ -83,6 +85,16 @@ def _demo_social(now):
     db.add_social_watch("tiktok_ads", "", "US")
 
 
+def _demo_history(videos, now):
+    """Lịch sử theo dõi 3 ngày: số liệu hôm trước nhỏ hơn hôm nay một chút."""
+    from datetime import datetime
+    for back, k in ((2, 0.6), (1, 0.8), (0, 1.0)):
+        day = datetime.fromtimestamp(now - back * DAY).strftime("%Y-%m-%d")
+        db.record_history([{**v, "pages_active": int(v["pages_active"] * k), "shops_active": int(v["shops_active"] * k),
+                            "shops_win": int(v["shops_win"] * k), "ads_active": int(v["ads_active"] * k),
+                            "buckets": {**v["buckets"], "scale": int(v["buckets"]["scale"] * k)}} for v in videos], day)
+
+
 def main():
     # Dữ liệu demo luôn tạo mới để tuổi QC/video đúng như mô tả. Chốt an toàn: chỉ xoá khi CSDL
     # chỉ chứa dữ liệu demo; gặp dữ liệu thật thì dừng, không đụng vào.
@@ -108,7 +120,8 @@ def main():
             db.save_landing({"url": link, "final_url": link, "domain": shop, "platform": "shopify",
                              "created_ts": now - lage * DAY if lage else None, "published_ts": None,
                              "title": text, "price": price, "checked_ts": now, "error": None,
-                             "date_source": "api" if lage else None})
+                             "date_source": "api" if lage else None,
+                             "compare_price": f"{float(price) * 2:.2f}" if pi % 2 == 1 else None})
             all_runs = [(r, True) for r in runs] + [(vage - k % 3, False) for k in range(gone if si == 0 else 0)]
             all_runs[0] = (max(all_runs[0][0], vage) if si == 0 else all_runs[0][0], True)
             for k, (age, active) in enumerate(all_runs):
@@ -124,12 +137,16 @@ def main():
     db.upsert_ads(ads, "demo")
     for a in ads:
         db.set_thumb(a["ad_id"], a["thumb_path"], a["dhash"])
-    db.replace_videos(analyze.build_videos(db.all_ads(), db.landings_by_url()))
+    videos = analyze.build_videos(db.all_ads(), db.landings_by_url())
+    db.replace_videos(videos)
+    _demo_history(videos, now)
+    db.set_mark(videos[0]["cid"], "test", True)
     _demo_social(now)
     db.add_watch_keyword("dog mom shirt", "US")
     db.add_watch_keyword("personalized ornament", "US")
     db.add_follow("shop", "bloomyard.com", "bloomyard.com")
     db.add_follow("page", "100", "Bloomyard 1")
+    db.set_setting("schema", 2)               # dữ liệu mẫu đã chấm theo bản mới
     print(f"Đã tạo {len(ads)} QC demo trong {config.DATA_DIR}")
 
 

@@ -6,7 +6,7 @@ import {dhashBitmap, smallJpeg} from "./imagehash.js";
 
 const DAY = 86400;
 const DATA_STORES = ["ads", "landings", "videos", "follows", "watch_keywords", "social_videos", "social_snapshots",
-  "social_watch", "notified", "scans", "thumbs", "rate_events", "diag"];
+  "social_watch", "notified", "scans", "thumbs", "rate_events", "diag", "video_history", "marks", "digs", "stores"];
 
 const PRODUCTS = [
   // [nội dung, giá, ngày tuổi video, ngày tuổi trang bán, [[shop, số page, [tuổi QC đang chạy]]], số QC đã tắt]
@@ -24,6 +24,8 @@ const PRODUCTS = [
     [["advent-cozy.com", 6, [4, 3, 2, 1, 1, 0]], ["memorialgift.co", 2, [1, 0]]], 0],
   ["Veteran Truck Flag 🇺🇸 Proud army veteran", "34.99", 3, null,
     [["moto-loud.com", 2, [3, 2]]], 0],
+  ["Grandma's Garden Flag 🌻 Personalized with grandkids names", "24.99", 60, 58,
+    [["flagcraft.co", 3, [55, 40, 25, 18, 3]], ["yardjoy.shop", 2, [35, 22, 10]], ["porchpride.com", 2, [28, 16]]], 6],
 ];
 
 const SOCIAL = [
@@ -103,7 +105,7 @@ export async function load() {
       const link = `https://${shop}/products/demo-${pi}`;
       await db.saveLanding({url: link, final_url: link, domain: shop, platform: "shopify",
         created_ts: lage ? now - lage * DAY : null, published_ts: null, title: text, price, checked_ts: now,
-        error: null, date_source: lage ? "api" : null});
+        error: null, date_source: lage ? "api" : null, compare_price: pi % 2 === 1 ? (+price * 2).toFixed(2) : null});
       const all = runs.map(r => [r, true]);
       if (si === 0) for (let k = 0; k < gone; k++) all.push([vage - k % 3, false]);
       all[0] = [si === 0 ? Math.max(all[0][0], vage) : all[0][0], true];
@@ -118,7 +120,17 @@ export async function load() {
   }
   await db.upsertAds(ads, "demo");
   for (const a of ads) await db.setThumb(a.ad_id, a._thumb, a._hash);
-  await db.replaceVideos(buildVideos(await db.allAds(), await db.landingsByUrl()));
+  const videos = buildVideos(await db.allAds(), await db.landingsByUrl());
+  await db.replaceVideos(videos);
+  // Lịch sử theo dõi 3 ngày: số liệu hôm trước nhỏ hơn hôm nay một chút
+  for (const [back, k] of [[2, 0.6], [1, 0.8], [0, 1.0]]) {
+    const d = new Date((now - back * DAY) * 1000);
+    const day = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+    const f = x => Math.trunc(x * k);
+    await db.recordHistory(videos.map(v => ({...v, pages_active: f(v.pages_active), shops_active: f(v.shops_active),
+      shops_win: f(v.shops_win), ads_active: f(v.ads_active), buckets: {...v.buckets, scale: f(v.buckets.scale)}})), day);
+  }
+  await db.setMark(videos[0].cid, "test", true);
 
   for (let i = 0; i < SOCIAL.length; i++) {
     const [plat, itemId, cap, author, ageH, views, likes, comments, shares, extra] = SOCIAL[i];

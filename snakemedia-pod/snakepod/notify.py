@@ -30,7 +30,7 @@ def public_settings():
     """Cho giao diện: không trả nguyên token."""
     s = settings()
     tok = s.pop("telegram_token")
-    return {**s, "has_token": bool(tok), "token_hint": ("…" + tok[-4:]) if tok else ""}
+    return {**s, "desktop": s["windows"], "has_token": bool(tok), "token_hint": ("…" + tok[-4:]) if tok else ""}
 
 
 def save_settings(telegram_token=None, telegram_chat_id=None, windows=None, events=None):

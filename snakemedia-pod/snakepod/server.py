@@ -22,6 +22,11 @@ async def lifespan(_app):
     db.init()
     config.THUMB_DIR.mkdir(parents=True, exist_ok=True)
     jobs.start_worker()
+    # Cập nhật lên bản có tab Tiềm năng / Bò sữa / lịch sử: chấm lại 1 lần để video cũ có đủ số liệu mới
+    if db.get_setting("schema", 1) < 2:
+        db.set_setting("schema", 2)
+        if db.list_videos():
+            jobs.submit("recompute", "Chấm lại (bản nâng cấp)", lambda: jobs.recompute() or 0)
     yield
 
 
@@ -29,7 +34,8 @@ app = FastAPI(title="SNAKEMEDIA POD", lifespan=lifespan)
 
 
 class ScanIn(BaseModel):
-    keyword: str
+    keyword: str = ""
+    keywords: list[str] = []    # quét hàng loạt: mỗi dòng 1 từ khoá
     country: str = config.DEFAULT_COUNTRY
     max_ads: int = config.DEFAULT_MAX_ADS
     save: bool = False          # lưu từ khoá để tự quét mỗi đêm
@@ -60,12 +66,25 @@ class NotifyIn(BaseModel):
     telegram_token: str | None = None      # bỏ trống = giữ token cũ; "" = xoá
     telegram_chat_id: str | None = None
     windows: bool | None = None
+    desktop: bool | None = None            # tên dùng chung với bản tiện ích Chrome (= windows)
     events: dict | None = None
 
 
 class AutoIn(BaseModel):
     enabled: bool
     hour: int
+    stores: int | None = None   # số shop soi thêm mỗi đêm
+
+
+class MarkIn(BaseModel):
+    cid: str
+    kind: str                   # 'test' | 'hidden'
+    on: bool = True
+
+
+class CountIn(BaseModel):
+    n: int = 10
+    domains: list[str] = []
 
 
 DAY = 86400
@@ -74,8 +93,13 @@ DAY = 86400
 @app.get("/api/stats")
 def stats():
     counts = db.label_counts()
+    vids, mk = db.list_videos(), db.marks()
+    shown = [v for v in vids if "hidden" not in mk.get(v["cid"], ())]
+    tabs = {"potential": sum(1 for v in shown if v.get("potential")), "cow": sum(1 for v in shown if v.get("cash_cow")),
+            "test": sum(1 for m in mk.values() if "test" in m), "hidden": sum(1 for m in mk.values() if "hidden" in m),
+            "dig": len(jobs.dig_candidates()), "stores": sum(1 for r in jobs.store_rows() if r["status"] == "pending")}
     return {"labels": [{"key": k, "name": n, "count": counts.get(k, 0)} for k, n in LABELS.items()],
-            "total": sum(counts.values()), "scans": db.list_scans(10), "now": int(time.time())}
+            "total": sum(counts.values()), "tabs": tabs, "scans": db.list_scans(10), "now": int(time.time())}
 
 
 def _facets(items):
@@ -89,11 +113,43 @@ def _facets(items):
     return {"product_types": order(types), "niches": order(niches)}
 
 
+TAB_SORTS = {"potential": lambda v: (v.get("ads_new_48h", 0), v["ads_per_day"]),
+             "cow": lambda v: (v["buckets"]["old"], v["ads_per_day"])}
+
+
+def _decorate(items):
+    """Gắn đánh dấu (Video test / Đã ẩn), lần đào gần nhất và thay đổi so với hôm trước (lịch sử theo dõi)."""
+    mk, dug = db.marks(), db.digs()
+    hist = db.history([v["cid"] for v in items], 2)
+    for v in items:
+        v["marks"] = sorted(mk.get(v["cid"], ()))
+        v["dug_ts"] = dug.get(v["cid"])
+        h = hist.get(v["cid"]) or []
+        v["delta"] = ({k: h[0][k] - h[1][k] for k in ("pages_active", "shops_active", "shops_win", "scale", "urls")}
+                      if len(h) >= 2 else None)
+    return items
+
+
 @app.get("/api/videos")
 def videos(label: str | None = None, q: str | None = None, product_type: str | None = None,
            niche: str | None = None, pod: bool = False, page_id: str | None = None, shop: str | None = None,
-           spread: bool = False, product: str | None = None, offset: int = 0, limit: int = 60):
+           spread: bool = False, product: str | None = None, tab: str | None = None, offset: int = 0, limit: int = 60):
     items = db.list_videos(label)
+    mk = db.marks()
+    if tab == "hidden":
+        items = [v for v in items if "hidden" in mk.get(v["cid"], ())]
+    else:
+        items = [v for v in items if "hidden" not in mk.get(v["cid"], ())]
+    if tab == "test":
+        items = [v for v in items if "test" in mk.get(v["cid"], ())]
+    elif tab == "potential":
+        items = [v for v in items if v.get("potential")]
+    elif tab == "cow":
+        items = [v for v in items if v.get("cash_cow")]
+    elif tab == "dig":
+        items = jobs.dig_candidates()
+    if tab in TAB_SORTS:
+        items = sorted(items, key=TAB_SORTS[tab], reverse=True)
     if spread:   # QC Facebook đang lan nhanh: xếp theo số QC mới 48h
         items = sorted((v for v in items if v.get("spreading")),
                        key=lambda v: (v.get("ads_new_48h", 0), v.get("shops_new_48h", 0)), reverse=True)
@@ -117,7 +173,7 @@ def videos(label: str | None = None, q: str | None = None, product_type: str | N
     page = _page(items, offset, limit)
     for v in page:
         v.pop("ads", None)
-    return {"items": page, "total": len(items), "offset": max(0, offset), "facets": facets}
+    return {"items": _decorate(page), "total": len(items), "offset": max(0, offset), "facets": facets}
 
 
 def _page(items, offset, limit):
@@ -245,7 +301,8 @@ def notify_get():
 
 @app.post("/api/notify")
 def notify_save(body: NotifyIn):
-    notify.save_settings(body.telegram_token, body.telegram_chat_id, body.windows, body.events)
+    windows = body.windows if body.windows is not None else body.desktop
+    notify.save_settings(body.telegram_token, body.telegram_chat_id, windows, body.events)
     return notify.public_settings()
 
 
@@ -335,18 +392,95 @@ def video(cid: str):
         names.setdefault(a["page_id"], a.get("page_name") or a["page_id"])
     v["page_list"] = [{"id": p, "name": names.get(p, p), "followed": ("page", p) in followed} for p in v["page_ids"]]
     v["shop_list"] = [{"domain": d, "followed": ("shop", d) in followed} for d in v["shops"]]
+    _decorate([v])
+    v["history"] = db.history([cid], config.HISTORY_DAYS)[cid]
+    v["sourcing"] = sourcing_links(v)
     return v
+
+
+def sourcing_links(v):
+    """Link tìm nguồn hàng (config.SOURCING): theo tên sản phẩm và theo ảnh."""
+    from urllib.parse import quote_plus
+    words = (v.get("product_key") or "").replace("-", " ") or " ".join((v.get("title") or "").split()[:8])
+    q, image = quote_plus(words), quote_plus(v.get("thumb_url") or "")
+    return [{"name": n, "url": t.format(q=q, image=image)} for n, t in config.SOURCING
+            if q and ("{image}" not in t or image)]
 
 
 @app.post("/api/scan")
 def scan(body: ScanIn):
-    kw = body.keyword.strip()
-    if not kw:
+    kws = list(dict.fromkeys(k.strip() for k in [body.keyword, *body.keywords] if k and k.strip()))
+    if not kws:
         raise HTTPException(400, "Thiếu từ khoá")
-    if body.save:
-        db.add_watch_keyword(kw, body.country.upper())
-    jobs.submit("keyword", f"Quét '{kw}'", jobs.keyword_job(kw, body.country.upper(), max(10, min(body.max_ads, 2000))))
+    country, max_ads = body.country.upper(), max(10, min(body.max_ads, 2000))
+    queued = 0
+    for kw in kws[:200]:
+        if body.save:
+            db.add_watch_keyword(kw, country)
+        queued += jobs.submit("keyword", f"Quét '{kw}'", jobs.keyword_job(kw, country, max_ads))
+    return {"ok": True, "queued": queued}
+
+
+@app.get("/api/keywords/suggest")
+def keyword_suggest():
+    return jobs.keyword_suggestions()
+
+
+@app.post("/api/marks")
+def set_mark(body: MarkIn):
+    if body.kind not in ("test", "hidden"):
+        raise HTTPException(400, "kind phải là 'test' hoặc 'hidden'")
+    db.set_mark(body.cid, body.kind, body.on)
     return {"ok": True}
+
+
+@app.post("/api/dig/batch")
+def dig_batch(body: CountIn):
+    n = 0
+    for v in jobs.dig_candidates()[:max(1, min(body.n, 50))]:
+        n += jobs.submit("dig", f"Đào sâu '{v['title'][:40]}'", jobs.dig_job(v["cid"], config.DEFAULT_COUNTRY))
+    return {"queued": n}
+
+
+@app.get("/api/stores")
+def stores(status: str = "pending", offset: int = 0, limit: int = 50):
+    rows = jobs.store_rows()
+    cut = int(time.time()) - config.STORE_FRESH_DAYS * DAY
+    summary = {"total": len(rows), "pending": sum(1 for r in rows if r["status"] == "pending"),
+               "done": sum(1 for r in rows if r["status"] == "done"),
+               "new_videos_7d": sum(r["new_videos"] or 0 for r in rows if (r["swept_ts"] or 0) >= cut),
+               "auto": jobs.auto_settings()}
+    if status in ("pending", "done"):
+        rows = [r for r in rows if r["status"] == status]
+    return {"items": _page(rows, offset, limit), "total": len(rows), "offset": max(0, offset), "summary": summary}
+
+
+@app.post("/api/stores/sweep")
+def stores_sweep(body: CountIn):
+    domains = body.domains or [r["domain"] for r in jobs.store_rows() if r["status"] == "pending"][:max(1, min(body.n, 100))]
+    return {"queued": jobs.queue_sweeps(domains)}
+
+
+@app.get("/api/export")
+def export_data():
+    return db.export_data()
+
+
+@app.post("/api/import")
+def import_data(body: dict):
+    try:
+        ads, lands = db.import_data(body)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    jobs.submit("recompute", "Gộp kho + chấm lại", lambda: (jobs.process_after_scan() or 0))
+    return {"ads": ads, "landings": lands}
+
+
+@app.get("/api/info")
+def info():
+    with db.connect() as conn:
+        has = conn.execute("SELECT (SELECT COUNT(*) FROM ads) + (SELECT COUNT(*) FROM social_videos)").fetchone()[0]
+    return {"app": True, "demo": False, "has_data": bool(has)}
 
 
 # ---- từ khoá tự quét + lịch ----
@@ -371,7 +505,11 @@ def get_autoscan():
 def set_autoscan(body: AutoIn):
     if not 0 <= body.hour <= 23:
         raise HTTPException(400, "Giờ phải từ 0 đến 23")
-    db.set_setting("auto", {**jobs.auto_settings(), "enabled": body.enabled, "hour": body.hour})
+    if body.stores is not None and not 0 <= body.stores <= 200:
+        raise HTTPException(400, "Số shop soi mỗi đêm: 0–200")
+    cur = jobs.auto_settings()
+    db.set_setting("auto", {**cur, "enabled": body.enabled, "hour": body.hour,
+                            "stores": cur["stores"] if body.stores is None else body.stores})
     return get_autoscan()
 
 

@@ -178,6 +178,17 @@ def summarize(cid, ads, landings, now=None):
                     first_ts - landing_first_ts > config.PAGE_OLDER_THAN_VIDEO * DAY)
 
     label, checks = _label(video_age, landing_age, page_old, shops_active, shops_win, buckets)
+    longest_run = max((_days(a.get("start_ts"), now) or 0 for a in active), default=0)
+    potential, cash_cow, flag_checks = _flags(video_age, page_old, label, ads_new, len(pages_active), longest_run,
+                                              buckets, len(shops_active))
+
+    # Mọi trang đang bán sản phẩm (link trong QC), nhiều QC nhất lên trước
+    sell_pages = []
+    for u, n in link_counts.most_common(30):
+        l = landings.get(u) or {}
+        sell_pages.append({"url": u, "ads": n, "domain": urlparse(u).netloc.lower().removeprefix("www."),
+                           "platform": l.get("platform"), "price": l.get("price"), "compare_price": l.get("compare_price"),
+                           "created_ts": l.get("created_ts"), "date_source": l.get("date_source")})
 
     rep = max(ads, key=lambda a: (bool(a.get("video_url")), bool(a.get("thumb_path")), a.get("is_active") or 0,
                                   _w(a)))
@@ -203,6 +214,7 @@ def summarize(cid, ads, landings, now=None):
         "ad_library_url": f"https://www.facebook.com/ads/library/?id={rep['ad_id']}",
         "main_link": main_link,
         "price": (main_landing or {}).get("price"),
+        "compare_price": (main_landing or {}).get("compare_price"),
         "platform": platform,
         "product_type": product_type,
         "niches": niches,
@@ -230,6 +242,12 @@ def summarize(cid, ads, landings, now=None):
         "shops_new_48h": shops_new,
         "pages_new_48h": len({a["page_id"] for a in fresh if a.get("page_id")}),
         "spreading": spreading,
+        "potential": potential,
+        "cash_cow": cash_cow,
+        "flag_checks": flag_checks,
+        "longest_run_days": round(longest_run, 1),
+        "urls_total": len(link_counts),
+        "sell_pages": sell_pages,
         "buckets": buckets,
         "page_ids": sorted(pages_all),
         "shops": sorted(shops_all),
@@ -279,6 +297,23 @@ def _label(video_age, landing_age, page_old, shops_active, shops_win, buckets):
     else:
         label = "theo_doi"
     return label, checks
+
+
+def _flags(video_age, page_old, label, ads_new, n_pages, longest_run, buckets, n_shops):
+    """Video Tiềm Năng (vừa nhú) và SP bò sữa (chạy đều nhiều tuần) — 2 tab riêng, không thay nhãn chính."""
+    c = config
+    young = video_age is not None and video_age <= c.POTENTIAL_MAX_DAYS
+    stirring = ads_new >= c.POTENTIAL_MIN_NEW_ADS or n_pages >= c.POTENTIAL_MIN_PAGES
+    potential = young and stirring and not page_old and label not in ("sap_win", "win")
+    cash_cow = (video_age is not None and video_age >= c.COW_MIN_DAYS and longest_run >= c.COW_MIN_RUN_DAYS
+                and buckets["old"] >= c.COW_MIN_OLD_ADS and n_shops >= c.COW_MIN_SHOPS)
+    checks = [
+        {"ok": potential, "text": f"Tiềm năng: video ≤ {c.POTENTIAL_MAX_DAYS} ngày, ≥ {c.POTENTIAL_MIN_NEW_ADS} QC mới/48h "
+                                  f"hoặc ≥ {c.POTENTIAL_MIN_PAGES} page đang chạy, chưa vào Sắp WIN / Win"},
+        {"ok": cash_cow, "text": f"Bò sữa: video ≥ {c.COW_MIN_DAYS} ngày, có QC sống ≥ {c.COW_MIN_RUN_DAYS} ngày, "
+                                 f"≥ {c.COW_MIN_OLD_ADS} QC sống > {c.WIN_MAX_DAYS} ngày, ≥ {c.COW_MIN_SHOPS} shop đang chạy"},
+    ]
+    return potential, cash_cow, checks
 
 
 def build_videos(ads, landings, now=None):

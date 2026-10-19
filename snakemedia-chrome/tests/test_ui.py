@@ -27,6 +27,7 @@ def test_every_view_renders_with_demo_data(ext):
     page.wait_for_selector("#drawer:not(.hidden) >> text=Vì sao có nhãn này")
     page.click("#drawer .x")
     page.click("text=▦ Lưới")
+    page.wait_for_selector(".gcard")
     assert page.locator(".gcard").count() == 2
     _show(page, "viral")
     page.locator(".gcard").first.click()

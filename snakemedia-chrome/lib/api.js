@@ -74,14 +74,53 @@ const clean = v => { const {_rank, ...rest} = v; return rest; };
 
 // ---------------- tổng quan + video QC Facebook ----------------
 
+const hasMark = (mk, cid, kind) => !!(mk[cid] && mk[cid].has(kind));
+
 route("GET", "/api/stats", async () => {
   const counts = await db.labelCounts();
+  const [vids, mk] = await Promise.all([db.listVideos(), db.marks()]);
+  const shown = vids.filter(v => !hasMark(mk, v.cid, "hidden"));
+  const ms = Object.values(mk);
+  const tabs = {potential: shown.filter(v => v.potential).length, cow: shown.filter(v => v.cash_cow).length,
+    test: ms.filter(m => m.has("test")).length, hidden: ms.filter(m => m.has("hidden")).length,
+    dig: (await jobs.digCandidates()).length, stores: (await jobs.storeRows()).filter(r => r.status === "pending").length};
   return {labels: Object.entries(LABELS).map(([key, name]) => ({key, name, count: counts[key] || 0})),
-    total: Object.values(counts).reduce((s, n) => s + n, 0), scans: await db.listScans(10), now: db.now()};
+    total: Object.values(counts).reduce((s, n) => s + n, 0), tabs, scans: await db.listScans(10), now: db.now()};
 });
+
+const TAB_SORTS = {potential: v => [v.ads_new_48h || 0, v.ads_per_day], cow: v => [v.buckets.old, v.ads_per_day]};
+const cmpDesc = (x, y) => { for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return y[i] - x[i]; return 0; };
+
+// Gắn đánh dấu (Video test / Đã ẩn), lần đào gần nhất và thay đổi so với hôm trước (lịch sử theo dõi).
+async function decorate(items) {
+  const [mk, dug, hist] = await Promise.all([db.marks(), db.digs(), db.history(items.map(v => v.cid), 2)]);
+  for (const v of items) {
+    v.marks = [...(mk[v.cid] || [])].sort();
+    v.dug_ts = dug[v.cid] ?? null;
+    const h = hist[v.cid] || [];
+    v.delta = h.length >= 2 ? Object.fromEntries(["pages_active", "shops_active", "shops_win", "scale", "urls"].map(k => [k, h[0][k] - h[1][k]])) : null;
+  }
+  return items;
+}
+
+// Link tìm nguồn hàng (C.SOURCING): theo tên sản phẩm và theo ảnh.
+function sourcingLinks(v) {
+  const words = (v.product_key || "").replace(/-/g, " ") || (v.title || "").split(/\s+/).filter(Boolean).slice(0, 8).join(" ");
+  const plus = x => encodeURIComponent(x).replace(/%20/g, "+");
+  const q = plus(words), image = plus(v.thumb_url || "");
+  return C.SOURCING.filter(([, t]) => q && (!t.includes("{image}") || image))
+    .map(([name, t]) => ({name, url: t.replace("{q}", q).replace("{image}", image)}));
+}
 
 route("GET", "/api/videos", async ({q}) => {
   let items = (await db.listVideos(str(q, "label"))).map(clean);
+  const mk = await db.marks(), tab = str(q, "tab");
+  items = items.filter(v => hasMark(mk, v.cid, "hidden") === (tab === "hidden"));
+  if (tab === "test") items = items.filter(v => hasMark(mk, v.cid, "test"));
+  else if (tab === "potential") items = items.filter(v => v.potential);
+  else if (tab === "cow") items = items.filter(v => v.cash_cow);
+  else if (tab === "dig") items = (await jobs.digCandidates()).map(clean);
+  if (tab in TAB_SORTS) items.sort((a, b) => cmpDesc(TAB_SORTS[tab](a), TAB_SORTS[tab](b)));
   if (bool(q, "spread"))   // QC Facebook đang lan nhanh: xếp theo số QC mới 48h
     items = items.filter(v => v.spreading)
       .sort((a, b) => ((b.ads_new_48h || 0) - (a.ads_new_48h || 0)) || ((b.shops_new_48h || 0) - (a.shops_new_48h || 0)));
@@ -100,7 +139,7 @@ route("GET", "/api/videos", async ({q}) => {
   if (str(q, "niche")) items = items.filter(v => (v.niches || []).includes(q.get("niche")));
   const page = pageOf(items, int(q, "offset", 0), int(q, "limit", 60)).map(({ads, ...v}) => v);
   await withThumbs(page, "thumb", "thumb_src");
-  return {items: page, total: items.length, offset: Math.max(0, int(q, "offset", 0)), facets: f};
+  return {items: await decorate(page), total: items.length, offset: Math.max(0, int(q, "offset", 0)), facets: f};
 });
 
 route("GET", "/api/videos/{cid}", async ({params}) => {
@@ -112,6 +151,9 @@ route("GET", "/api/videos/{cid}", async ({params}) => {
   v.page_list = v.page_ids.map(p => ({id: p, name: names[p] || p, followed: followed.has("page\u0000" + p)}));
   v.shop_list = v.shops.map(d => ({domain: d, followed: followed.has("shop\u0000" + d)}));
   await withThumbs([v], "thumb", "thumb_src");
+  await decorate([v]);
+  v.history = (await db.history([v.cid], C.HISTORY_DAYS))[v.cid];
+  v.sourcing = sourcingLinks(v);
   return clean(v);
 });
 
@@ -123,13 +165,62 @@ route("POST", "/api/videos/{cid}/dig", async ({params, q}) => {
 });
 
 route("POST", "/api/scan", async ({body}) => {
-  const kw = String(body.keyword || "").trim();
-  need(kw, "Thiếu từ khoá");
+  const kws = [...new Set([body.keyword, ...(body.keywords || [])].map(k => String(k || "").trim()).filter(Boolean))];
+  need(kws.length, "Thiếu từ khoá");
   const country = String(body.country || C.DEFAULT_COUNTRY).toUpperCase();
-  if (body.save) await db.addWatchKeyword(kw, country);
   const maxAds = Math.max(10, Math.min(+body.max_ads || C.DEFAULT_MAX_ADS, 2000));
-  jobs.submit("keyword", `Quét '${kw}'`, {keyword: kw, country, max_ads: maxAds});
+  let queued = 0;
+  for (const kw of kws.slice(0, 200)) {
+    if (body.save) await db.addWatchKeyword(kw, country);
+    queued += jobs.submit("keyword", `Quét '${kw}'`, {keyword: kw, country, max_ads: maxAds});
+  }
+  return {ok: true, queued};
+});
+
+route("GET", "/api/keywords/suggest", () => jobs.keywordSuggestions());
+
+route("POST", "/api/marks", async ({body}) => {
+  need(["test", "hidden"].includes(body.kind), "kind phải là 'test' hoặc 'hidden'");
+  await db.setMark(String(body.cid), body.kind, body.on ?? true);
   return {ok: true};
+});
+
+route("POST", "/api/dig/batch", async ({body}) => {
+  let n = 0;
+  for (const v of (await jobs.digCandidates()).slice(0, Math.max(1, Math.min(+body.n || 10, 50))))
+    n += jobs.submit("dig", `Đào sâu '${v.title.slice(0, 40)}'`, {cid: v.cid, country: C.DEFAULT_COUNTRY});
+  return {queued: n};
+});
+
+route("GET", "/api/stores", async ({q}) => {
+  let rows = await jobs.storeRows();
+  const cut = db.now() - C.STORE_FRESH_DAYS * DAY;
+  const summary = {total: rows.length, pending: rows.filter(r => r.status === "pending").length,
+    done: rows.filter(r => r.status === "done").length,
+    new_videos_7d: rows.filter(r => (r.swept_ts || 0) >= cut).reduce((s, r) => s + (r.new_videos || 0), 0),
+    auto: await jobs.autoSettings()};
+  const status = q.get("status") || "pending";
+  if (["pending", "done"].includes(status)) rows = rows.filter(r => r.status === status);
+  return {items: pageOf(rows, int(q, "offset", 0), int(q, "limit", 50)), total: rows.length,
+    offset: Math.max(0, int(q, "offset", 0)), summary};
+});
+
+route("POST", "/api/stores/sweep", async ({body}) => {
+  const domains = (body.domains && body.domains.length) ? body.domains
+    : (await jobs.storeRows()).filter(r => r.status === "pending").slice(0, Math.max(1, Math.min(+body.n || 10, 100))).map(r => r.domain);
+  return {queued: jobs.queueSweeps(domains)};
+});
+
+route("GET", "/api/export", () => db.exportData());
+
+route("POST", "/api/import", async ({body}) => {
+  let ads, lands;
+  try { [ads, lands] = await db.importData(body); } catch (e) {
+    if (e instanceof RangeError) throw new HttpError(400, e.message);
+    throw e;
+  }
+  jobs.submit("passive", "Gộp kho + chấm lại", {});
+  return {ads, landings: lands};
 });
 
 // Bảng niche: niche nào đang có nhiều video Sắp WIN / Win / Scale.
@@ -314,7 +405,10 @@ route("GET", "/api/autoscan", autoscan);
 route("POST", "/api/autoscan", async ({body}) => {
   const hour = +body.hour;
   need(Number.isInteger(hour) && hour >= 0 && hour <= 23, "Giờ phải từ 0 đến 23");
-  await db.setSetting("auto", {...(await jobs.autoSettings()), enabled: !!body.enabled, hour});
+  const stores = body.stores === null || body.stores === undefined ? null : +body.stores;
+  need(stores === null || (Number.isInteger(stores) && stores >= 0 && stores <= 200), "Số shop soi mỗi đêm: 0–200");
+  const cur = await jobs.autoSettings();
+  await db.setSetting("auto", {...cur, enabled: !!body.enabled, hour, stores: stores === null ? cur.stores : stores});
   return autoscan();
 });
 

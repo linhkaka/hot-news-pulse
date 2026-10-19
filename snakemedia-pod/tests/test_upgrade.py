@@ -113,7 +113,9 @@ def test_pod_follow_keyword_and_autoscan_api(app_env, monkeypatch):
         assert not jobs.scheduler_tick(datetime(2026, 10, 15, 3, 30))      # hôm nay đã quét rồi
         assert jobs.scheduler_tick(datetime(2026, 10, 16, 3, 1))           # sang ngày mới
         n_kw, n_follow, n_social = len(db.list_watch_keywords()), len(db.list_follows()), len(db.list_social_watch())
-        assert n_social and len(queued) == 2 * (n_kw + n_follow + n_social)
+        n_stores = min(20, sum(1 for r in jobs.store_rows() if r["status"] == "pending"))   # soi thêm shop video hot
+        assert n_social and n_stores and len(queued) == 2 * (n_kw + n_follow + n_social + n_stores)
+        assert sum(t.startswith("Soi store ") for t in queued) == 2 * n_stores
 
         c.delete(f"/api/follows/shop/{shop}")
         assert all(f["key"] != shop for f in c.get("/api/follows").json())

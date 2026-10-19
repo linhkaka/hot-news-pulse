@@ -63,3 +63,28 @@ VIRAL_MIN_VIEWS = 1_000_000    # "Viral": >= 1 triệu lượt xem ...
 VIRAL_MAX_DAYS = 14            # ... và video <= 14 ngày tuổi
 VIRAL_RISING_VPH = 2_000       # "Đang lên": >= 2.000 lượt xem/giờ ...
 VIRAL_RISING_MAX_DAYS = 7      # ... và video <= 7 ngày tuổi
+
+# Video Tiềm Năng: vừa nhú, shop bắt đầu nhảy vào nhưng chưa chín (chưa đủ điều kiện Sắp WIN / Win)
+POTENTIAL_MAX_DAYS = 10        # video <= 10 ngày tuổi ...
+POTENTIAL_MIN_NEW_ADS = 2      # ... và >= 2 QC mới trong 48 giờ
+POTENTIAL_MIN_PAGES = 2        # ... hoặc >= 2 page đang chạy
+
+# SP bò sữa: chạy đều nhiều tuần, không bùng lên rồi tắt (hợp Google Shopping / SEO / sàn / free traffic)
+COW_MIN_DAYS = 30              # video >= 30 ngày tuổi
+COW_MIN_RUN_DAYS = 21          # có QC đang chạy liên tục >= 21 ngày
+COW_MIN_OLD_ADS = 5            # >= 5 QC đang chạy đã sống > 14 ngày
+COW_MIN_SHOPS = 3              # >= 3 shop đang chạy
+
+DIG_FRESH_DAYS = 7             # video đã đào trong 7 ngày -> không cần đào lại
+STORE_FRESH_DAYS = 7           # shop đã soi trong 7 ngày -> "Đã soi"
+AUTO_SWEEP_STORES = 20         # mỗi đêm soi thêm 20 shop đang chạy video hot (sửa được trên giao diện)
+HISTORY_DAYS = 14              # lịch sử theo dõi mỗi video: giữ 14 ngày gần nhất trên giao diện
+
+# Tìm nguồn hàng: {q} = tên sản phẩm, {image} = link ảnh. Thêm/bớt tuỳ ý.
+SOURCING = [
+    ("Google Lens (theo ảnh)", "https://lens.google.com/uploadbyurl?url={image}"),
+    ("AliExpress", "https://www.aliexpress.com/wholesale?SearchText={q}"),
+    ("Amazon", "https://www.amazon.com/s?k={q}"),
+    ("Temu", "https://www.temu.com/search_result.html?search_key={q}"),
+    ("CJdropshipping", "https://www.google.com/search?q=site%3Acjdropshipping.com+{q}"),
+]

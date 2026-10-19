@@ -133,6 +133,8 @@ def check_landings():
 def recompute():
     videos = analyze.build_videos(db.all_ads(), db.landings_by_url())
     db.replace_videos(videos)
+    db.rekey(videos)
+    db.record_history(videos, datetime.now().strftime("%Y-%m-%d"))
     log(f"Đã chấm lại {len(videos)} video")
     notify.check_videos(videos, log)
 
@@ -236,12 +238,15 @@ def queue_all_watched(reason):
     for w in db.list_social_watch():
         n += submit("social", f"Viral {w['platform']} '{w['keyword']}'",
                     social_job(w["platform"], w["keyword"], w["country"] or country, config.DEFAULT_MAX_ADS))
+    n_stores = int(auto_settings().get("stores", config.AUTO_SWEEP_STORES))
+    n += queue_sweeps([r["domain"] for r in store_rows() if r["status"] == "pending"][:n_stores], country)
     log(f"{reason}: xếp {n} việc quét")
     return n
 
 
 def auto_settings():
-    return {"enabled": True, "hour": config.AUTO_SCAN_HOUR, "last_date": None, **db.get_setting("auto", {})}
+    return {"enabled": True, "hour": config.AUTO_SCAN_HOUR, "stores": config.AUTO_SWEEP_STORES, "last_date": None,
+            **db.get_setting("auto", {})}
 
 
 def scheduler_tick(now=None):
@@ -280,6 +285,110 @@ def dig_job(cid, country):
         safety.before_scan("facebook", log, should_stop)
         ads = scraper.scan_pages(pages, country, config.DIG_MAX_ADS_PER_PAGE, log, should_stop)
         db.upsert_ads(ads)
+        db.mark_dug(cid)
         process_after_scan()
         return len(ads)
     return run
+
+
+def dig_candidates():
+    """Video Sắp WIN / Tiềm năng chưa đào (hoặc đào đã lâu), nhiều QC/ngày lên trước."""
+    dug, mk = db.digs(), db.marks()
+    cut = int(time.time()) - config.DIG_FRESH_DAYS * 86400
+    return [v for v in db.list_videos()
+            if (v["label"] == "sap_win" or v.get("potential")) and "hidden" not in mk.get(v["cid"], ())
+            and dug.get(v["cid"], 0) < cut]
+
+
+# ---- quét store win: soi mọi shop đang chạy video hot để tìm sản phẩm khác của họ ----
+
+TAB_NAMES = {"sap_win": "Sắp WIN", "win": "Video Win", "scale": "Video scale"}
+
+
+def store_rows():
+    """Shop đang chạy video ở các tab Sắp WIN / Win / Scale / Tiềm năng / Bò sữa / Video test / Theo dõi."""
+    mk = db.marks()
+    followed = {f["key"] for f in db.list_follows() if f["kind"] == "shop"}
+    tabs = {}
+    for v in db.list_videos():
+        m = mk.get(v["cid"], set())
+        if "hidden" in m:
+            continue
+        names = ([TAB_NAMES[v["label"]]] if v["label"] in TAB_NAMES else []) + (["Tiềm năng"] if v.get("potential") else []) \
+            + (["Bò sữa"] if v.get("cash_cow") else []) + (["Video test"] if "test" in m else [])
+        if not names:
+            continue
+        for d in v["shops"]:
+            t = tabs.setdefault(d, {"tabs": set(), "videos": 0})
+            t["tabs"].update(names)
+            t["videos"] += 1
+    for d in followed:
+        tabs.setdefault(d, {"tabs": set(), "videos": 0})["tabs"].add("Theo dõi")
+    shops = {r["domain"]: r for r in db.shop_rows()}
+    sweeps = db.store_sweeps()
+    cut = int(time.time()) - config.STORE_FRESH_DAYS * 86400
+    order = ["Theo dõi", "Sắp WIN", "Video Win", "Video scale", "Tiềm năng", "Bò sữa", "Video test"]
+    out = []
+    for d, t in tabs.items():
+        r, sw = shops.get(d, {}), sweeps.get(d, {})
+        out.append({"domain": d, "tabs": [n for n in order if n in t["tabs"]], "hot_videos": t["videos"],
+                    "ads": r.get("ads", 0), "active": r.get("active") or 0, "pages": r.get("pages", 0),
+                    "platform": r.get("platform"), "swept_ts": sw.get("swept_ts"), "ads_found": sw.get("ads_found"),
+                    "new_videos": sw.get("new_videos"), "status": "done" if (sw.get("swept_ts") or 0) >= cut else "pending"})
+    out.sort(key=lambda r: (r["status"] != "pending", -r["ads"], r["domain"]))
+    return out
+
+
+def sweep_job(domain, country):
+    from . import scraper
+
+    def run():
+        safety.before_scan("facebook", log, should_stop)
+        known = {a["ad_id"] for a in db.all_ads()}          # QC đã có trước lượt soi
+        log(f"Soi store {domain}")
+        ads = scraper.scan_keyword(domain, country, config.DEFAULT_MAX_ADS, log, should_stop)
+        ads = [a for a in ads if a.get("domain") == domain] or ads
+        db.upsert_ads(ads)
+        process_after_scan()
+        fresh = {a["ad_id"] for a in ads} - known
+        new_videos = sum(1 for v in db.list_videos() if any(a["ad_id"] in fresh for a in v["ads"]))
+        db.save_store_sweep(domain, len(ads), new_videos)
+        log(f"{domain}: {len(ads)} QC, {new_videos} video mới")
+        return len(ads)
+    return run
+
+
+def queue_sweeps(domains, country=None):
+    country = country or config.DEFAULT_COUNTRY
+    return sum(submit("store", f"Soi store {d}", sweep_job(d, country)) for d in domains)
+
+
+# ---- tự đào từ khoá: lấy từ tên sản phẩm / nội dung của các video đang hot mà bạn chưa quét ----
+
+_STOP = {"the", "a", "an", "and", "or", "for", "to", "of", "in", "on", "with", "your", "you", "my", "our", "is", "it",
+         "this", "that", "new", "best", "get", "now", "buy", "shop", "free", "off", "sale", "just", "every", "from",
+         "at", "by", "be", "are", "was", "will", "can", "all", "more", "most", "how", "why", "what", "who", "its"}
+
+
+def _phrase(words, n):
+    words = [w for w in words if w not in _STOP and not w.isdigit() and len(w) > 1]
+    return " ".join(words[:n]) if len(words) >= 2 else None
+
+
+def keyword_suggestions(limit=30):
+    known = {w["keyword"].lower() for w in db.list_watch_keywords()}
+    known |= {(a.get("keyword") or "").lower() for a in db.all_ads()}
+    count, source = {}, {}
+    for v in db.list_videos():
+        if not (v["label"] in ("sap_win", "win", "scale") or v.get("potential") or v.get("cash_cow")):
+            continue
+        cands = []
+        if v.get("product_key"):
+            cands.append((_phrase(v["product_key"].split("-"), 4), "tên sản phẩm"))
+        cands.append((_phrase(analyze._WORD_RE.findall((v.get("title") or "").lower()), 3), "nội dung QC"))
+        for kw, src in cands:
+            if kw and kw not in known:
+                count[kw] = count.get(kw, 0) + 1
+                source.setdefault(kw, src)
+    out = sorted(count, key=lambda k: (-count[k], k))[:limit]
+    return [{"keyword": k, "videos": count[k], "source": source[k]} for k in out]

@@ -32,6 +32,11 @@ async function init() {
   await registerCapture();
   await chrome.alarms.create("tick", {periodInMinutes: 1});
   await jobs.restore();
+  // Cập nhật lên bản có tab Tiềm năng / Bò sữa / lịch sử: chấm lại 1 lần để video cũ có đủ số liệu mới
+  if ((await db.getSetting("schema", 1)) < 2) {
+    await db.setSetting("schema", 2);
+    if (await db.count("ads")) jobs.submit("recompute", "Chấm lại (bản nâng cấp)", {});
+  }
 }
 const ready = init().catch(e => console.error("Khởi động lỗi", e));
 

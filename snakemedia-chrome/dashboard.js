@@ -1,7 +1,16 @@
+// Giao diện SNAKEMEDIA POD — 1 file dùng chung cho bản app (snakepod/static/app.js, API qua fetch)
+// và bản tiện ích Chrome (dashboard.js, API chạy trong phần nền, gọi qua chrome.runtime). Sửa ở app rồi chạy
+// snakemedia-chrome/sync_ui.py để chép sang tiện ích.
 const $ = s => document.querySelector(s);
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
-// Giao diện giống bản app; "API" chạy trong phần nền của tiện ích (lib/api.js), gọi qua chrome.runtime
+const IS_EXT = !!(globalThis.chrome && chrome.runtime && chrome.runtime.id);
+const NOUN = IS_EXT ? "Tiện ích" : "Tool";
+const CONFIG_FILE = IS_EXT ? "lib/config.js" : "snakepod/config.py";
 const api = async (p, o = {}) => {
+  if (!IS_EXT) return fetch(p, o).then(async r => {
+    if (!r.ok) { let m = r.status; try { m = (await r.json()).detail || m; } catch {} throw new Error(m); }
+    return r.json();
+  });
   const r = await chrome.runtime.sendMessage({type: "api", method: o.method || "GET", path: p,
     body: o.body ? JSON.parse(o.body) : null});
   if (!r) throw new Error("Không kết nối được phần nền của tiện ích. Tải lại trang này.");
@@ -14,13 +23,15 @@ const days = d => d == null ? "?" : `${Math.round(d)} ngày`;
 const fmtDate = ts => ts ? new Date(ts * 1000).toISOString().slice(0, 10) : "?";
 const ago = ts => { if (!ts) return "chưa"; const s = Date.now() / 1000 - ts;
   return s < 3600 ? `${Math.max(1, Math.round(s / 60))} phút trước` : s < 86400 ? `${Math.round(s / 3600)} giờ trước` : `${Math.round(s / 86400)} ngày trước`; };
-const thumb = v => v.thumb_src || v.thumb_url || "";
+const thumb = v => v.thumb_src || (v.thumb && !IS_EXT ? `/thumbs/${encodeURIComponent(v.thumb)}` : v.thumb_url) || "";
 const enc = encodeURIComponent;
 // Nút bấm mang dữ liệu trong data-args (JSON) thay vì nhúng vào mã JS: tên page/shop có dấu nháy cũng an toàn
 const act = (name, ...args) => `data-act="${name}" data-args="${esc(JSON.stringify(args))}"`;
 const LABEL = {sap_win: ["Sắp WIN", "p"], win: ["Video Win", "g"], scale: ["Video scale", ""], theo_doi: ["Chờ thêm dữ liệu", ""],
   trang_cu: ["Trang bán cũ", "r"], cu: ["Video già", "r"]};
-const TITLES = {notify: "Thông báo", safety: "Chế độ an toàn", viral: "Video viral", spread: "QC Facebook đang lan nhanh", overview: "Tổng quan", scan: "Quét từ khoá", all: "Tất cả video", niches: "Niche POD",
+const TABS = ["potential", "cow", "test", "hidden", "dig"];   // danh sách video lọc theo tab (không theo nhãn)
+const TITLES = {potential: "Video Tiềm Năng", cow: "SP bò sữa", test: "Video test", hidden: "Đã ẩn", dig: "Đào sâu",
+  stores: "Quét store win", history: "Lịch sử quét", data: "Góp kho dữ liệu", notify: "Thông báo", safety: "Chế độ an toàn", viral: "Video viral", spread: "QC Facebook đang lan nhanh", overview: "Tổng quan", scan: "Quét từ khoá", all: "Tất cả video", niches: "Niche POD",
   follows: "Theo dõi đặc biệt", keywords: "Tự quét mỗi đêm", shops: "Kho shop"};
 const DATE_SOURCE = {api: "dữ liệu sản phẩm", uuid: "ước tính từ mã sản phẩm", anh: "ước tính từ ảnh sản phẩm"};
 const POD_KEYWORDS = ["personalized dog shirt", "custom name mug", "personalized ornament", "nurse shirt", "teacher mug",
@@ -36,7 +47,7 @@ const SORTS = {vph: "Xếp: xem/giờ", views: "Xếp: lượt xem", likes: "X�
 const PLATFORM = {tiktok: "TikTok", tiktok_ads: "TikTok Top Ads", fb_reels: "Facebook Reels"};
 const num = n => n == null ? "?" : n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M"
   : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n);
-const cover = v => v.cover_src || v.cover_url || "";
+const cover = v => v.cover_src || (v.cover_path && !IS_EXT ? `/thumbs/${encodeURIComponent(v.cover_path)}` : v.cover_url) || "";
 // Bộ lọc dùng chung cho các màn hình danh sách video
 const filters = {product_type: "", niche: "", pod: false, page_id: "", shop: "", product: "", scopeName: ""};
 
@@ -57,14 +68,24 @@ function showScope(kind, key, name) {
   filters.page_id = kind === "page" ? key : ""; filters.shop = kind === "shop" ? key : "";
   filters.scopeName = name || key; setView("all");
 }
-function filterBy(key, value) { filters[key] = value; pageOffset = 0; if (!LABEL[view] && view !== "all") setView("all"); else render(); }
+const isList = v => !!LABEL[v] || v === "all" || TABS.includes(v);
+function filterBy(key, value) { filters[key] = value; pageOffset = 0; if (!isList(view)) setView("all"); else render(); }
 
 async function refreshCounts() {
   const s = await api("/api/stats");
   for (const l of s.labels) document.querySelector(`[data-count=${l.key}]`).textContent = l.count;
   document.querySelector("[data-count=all]").textContent = s.total;
+  for (const [k, n] of Object.entries(s.tabs || {})) { const el = document.querySelector(`[data-tab=${k}]`); if (el) el.textContent = n || ""; }
   api("/api/autoscan").then(a => { $("#cnt-follows").textContent = a.follows; $("#cnt-keywords").textContent = a.keywords; });
   return s;
+}
+
+function tabChips(v) {
+  let h = "";
+  if (v.potential && view !== "potential") h += `<span class="chip g">🌱 Tiềm năng</span>`;
+  if (v.cash_cow && view !== "cow") h += `<span class="chip o">🐄 Bò sữa</span>`;
+  if ((v.marks || []).includes("test") && view !== "test") h += `<span class="chip p">🧪 Test</span>`;
+  return h;
 }
 
 function podChips(v) {
@@ -81,7 +102,7 @@ function meta(v) {
   parts.push(`video ${days(v.video_age_days)}`);
   if (v.landing_age_days != null) parts.push(`<span class="${v.page_old ? "red" : ""}">URL ${days(v.landing_age_days)}${v.landing_date_source && v.landing_date_source !== "api" ? "*" : ""}</span>`);
   parts.push(`${v.pages_active}/${v.pages_total} page`, `${v.shops_active}/${v.shops_total} shop`, `${v.ads_per_day} QC/ngày`);
-  return parts.join(" · ") + podChips(v) + (v.platform ? `<span class="chip">${esc(v.platform)}</span>` : "");
+  return parts.join(" · ") + podChips(v) + tabChips(v) + (v.platform ? `<span class="chip">${esc(v.platform)}</span>` : "");
 }
 
 function row(v) {
@@ -100,12 +121,40 @@ function filterBar(facets) {
     <select data-change="product_type"><option value="">Mọi loại sản phẩm</option>${opt(facets.product_types, filters.product_type)}</select>
     <select data-change="niche"><option value="">Mọi niche</option>${opt(facets.niches, filters.niche)}</select>
     <label><input type="checkbox" ${filters.pod ? "checked" : ""} data-change="pod"> Chỉ POD</label>
-    ${layoutToggle()}
+    ${layoutToggle(true)}
   </div>`;
 }
 
-function layoutToggle() {
-  return `<span class="seg" style="margin-left:auto"><button class="small ${layout === "list" ? "on" : ""}" ${act("setLayout", "list")}>☰ Danh sách</button><button class="small ${layout === "grid" ? "on" : ""}" ${act("setLayout", "grid")}>▦ Lưới</button></span>`;
+function layoutToggle(withTable = false) {
+  const b = (k, name) => `<button class="small ${layout === k ? "on" : ""}" ${act("setLayout", k)}>${name}</button>`;
+  return `<span class="seg" style="margin-left:auto">${b("list", "☰ Danh sách")}${b("grid", "▦ Lưới")}${withTable ? b("table", "▤ Bảng") : ""}</span>`;
+}
+
+const dm = ts => ts ? new Date(ts * 1000).toLocaleDateString("vi-VN", {day: "2-digit", month: "2-digit"}) : "?";
+const plus = (n, unit = "") => n > 0 ? `<b class="green">+${n}</b>${unit}` : n < 0 ? `<b class="red">${n}</b>${unit}` : `+0${unit}`;
+
+// Bảng số liệu: mỗi cột 1 số lớn + 1 dòng giải thích nhỏ
+function fbTable(items) {
+  const cell = (big, small, cls = "") => `<td class="num"><b class="${cls}" style="font-size:15px">${big}</b><br><small class="note">${small}</small></td>`;
+  return `<div class="list"><table class="vt"><tr><th>Video</th><th class="num">Ads cũ</th><th class="num">Win</th><th class="num">Scale</th>
+    <th class="num">Tuổi video</th><th class="num">Tuổi URL</th><th class="num">Shop</th><th class="num">Fanpage</th></tr>
+    ${items.map(v => {
+      const b = v.buckets, d = v.delta;
+      const before = v.page_old && v.first_ts && v.landing_created_ts ? Math.round((v.first_ts - v.landing_created_ts) / 86400) : null;
+      return `<tr class="vrow ${v.cid === openCid ? "on" : ""}" data-cid="${esc(v.cid)}">
+        <td><div class="vcell">${thumb(v) ? `<img loading="lazy" src="${esc(thumb(v))}">` : `<div class="ph"></div>`}
+          <div style="min-width:0"><div class="t">${esc(v.title)}</div>
+          <div class="m">${v.price ? "$" + esc(v.price) + " · " : ""}${v.ads_per_day} ads/ngày${podChips(v)}${tabChips(v)}</div></div></div></td>
+        ${cell(b.old + " ads", `lâu nhất ${Math.round(v.longest_run_days || 0)} ngày`)}
+        ${cell(b.win, `${v.shops_win} shop giữ`, "green")}
+        ${cell(b.scale, d ? plus(d.scale, " ads hôm nay") : `${v.ads_new_24h} QC mới 24h`)}
+        ${cell(days(v.video_age_days), `lên ${dm(v.first_ts)}`)}
+        ${cell(v.landing_age_days == null ? "—" : days(v.landing_age_days) + (v.landing_date_source && v.landing_date_source !== "api" ? "*" : ""),
+          before ? `trước video ${before} ngày` : v.landing_created_ts ? `tạo ${dm(v.landing_created_ts)}` : "chưa rõ", v.page_old ? "red" : "")}
+        ${cell(`${v.shops_active}/${v.shops_total}`, `${v.shops_new_post} đang lên bài`)}
+        ${cell(`${v.pages_active}/${v.pages_total}`, d ? plus(d.pages_active, " fanpage hôm nay") : "")}
+      </tr>`;
+    }).join("")}</table></div>`;
 }
 
 function pager(total) {
@@ -129,10 +178,22 @@ function fbCard(v) {
     `${v.price ? "$" + esc(v.price) + " · " : ""}video ${days(v.video_age_days)} · ${v.shops_active}/${v.shops_total} shop · ${v.ads_per_day} QC/ngày${podChips(v)}`);
 }
 
-function wrapItems(items, rowFn, cardFn) {
-  return layout === "grid" ? `<div class="grid">${items.map(cardFn).join("")}</div>`
+function wrapItems(items, rowFn, cardFn, tableFn = null, lay = layout) {
+  if (lay === "table" && tableFn) return tableFn(items);
+  return lay === "grid" ? `<div class="grid">${items.map(cardFn).join("")}</div>`
     : `<div class="list">${items.map(rowFn).join("")}</div>`;
 }
+
+const TAB_NOTES = {
+  potential: `Video vừa nhú: ≤ 10 ngày tuổi, đã có ≥ 2 QC mới trong 48 giờ hoặc ≥ 2 page chạy, nhưng chưa đủ điều kiện Sắp WIN.
+    Hợp với người chạy TikTok: bắt con đang nhú trước khi nó tràn khắp nơi.`,
+  cow: `Sản phẩm chạy đều nhiều tuần, không bùng lên rồi tắt: video ≥ 30 ngày, có QC sống ≥ 21 ngày, ≥ 5 QC sống trên 14 ngày,
+    ≥ 3 shop đang chạy. Hợp với Google Shopping / Search, SEO, sàn, free traffic — kênh cần thời gian mới lên top nên hàng phải sống dai.`,
+  test: "Video bạn đánh dấu để test (nút + Video test trong bảng chi tiết).",
+  hidden: "Video bạn đã ẩn khỏi mọi danh sách. Mở chi tiết → Bỏ ẩn để đưa lại.",
+  dig: `Video Sắp WIN / Tiềm năng chưa đào (hoặc đào đã quá 7 ngày). Đào sâu = soi toàn bộ QC (cả QC đã tắt) của các page
+    đang chạy video để tìm mốc chạy sớm nhất và mọi shop đang bán.`,
+};
 
 async function renderList(label, extra = {}) {
   const p = new URLSearchParams(extra);
@@ -145,9 +206,15 @@ async function renderList(label, extra = {}) {
   const {items, facets, total} = await api("/api/videos?" + p);
   const bar = filterBar(facets);
   if (extra.spread) $("#cnt-spread").textContent = total;
-  const note = extra.spread ? `<p class="note">Video có ≥ 5 QC mới hoặc ≥ 2 shop mới chép trong 48 giờ qua (sửa trong lib/config.js). Đây là dấu hiệu một video đang được nhiều người đổ tiền cùng lúc.</p>` : "";
+  let note = extra.spread ? `<p class="note">Video có ≥ 5 QC mới hoặc ≥ 2 shop mới chép trong 48 giờ qua (sửa trong ${CONFIG_FILE}). Đây là dấu hiệu một video đang được nhiều người đổ tiền cùng lúc.</p>` : "";
+  if (extra.tab) note = `<p class="note">${TAB_NOTES[extra.tab]}</p>`;
+  if (extra.tab === "dig" && total) note += `<div class="toolbar"><input id="digN" type="number" min="1" max="50" value="${Math.min(5, total)}" style="width:70px">
+    <button class="primary small" ${act("digBatch")}>⤓ Đào các video đầu danh sách</button>
+    <span class="note">Mỗi video soi tối đa 6 page, nghỉ 20–45 giây giữa 2 page (chế độ an toàn).</span></div>`;
   if (!items.length) return note + bar + `<div class="list"><div class="empty">Chưa có video nào ở mục này.<br>Vào <a ${act("setView", "scan")}><b>Quét từ khoá</b></a> để bắt đầu.</div></div>`;
-  return note + bar + wrapItems(items, row, fbCard) + pager(total);
+  // SP bò sữa mặc định xem dạng bảng
+  const lay = extra.tab === "cow" && layout === "list" ? "table" : layout;
+  return note + bar + wrapItems(items, row, fbCard, fbTable, lay) + pager(total);
 }
 
 // ---------------- Video viral ----------------
@@ -200,8 +267,9 @@ async function renderViral() {
       <select name="period" title="Top Ads: khoảng thời gian"><option value="7">7 ngày</option><option value="30">30 ngày</option><option value="180">180 ngày</option></select>
       <label class="note"><input type="checkbox" name="save" checked> Tự quét mỗi đêm</label>
       <button class="primary">Quét</button></form>
-    <p class="note">Tiện ích dùng tài khoản TikTok / Facebook đang đăng nhập trên Chrome này (mục Chế độ an toàn → nút Đăng nhập).
-    Mỗi lần quét lưu lại số liệu, nên từ lần quét thứ 2 tiện ích tính được <b>tốc độ tăng thật</b> (xem/giờ giữa 2 lần quét).</p>
+    <p class="note">${IS_EXT ? "Tiện ích dùng tài khoản TikTok / Facebook đang đăng nhập trên Chrome này (mục Chế độ an toàn → nút Đăng nhập)."
+      : 'TikTok và Facebook Reels cần đăng nhập 1 lần (menu Start → "Đăng nhập TikTok" / "Đăng nhập Facebook").'}
+    Mỗi lần quét lưu lại số liệu, nên từ lần quét thứ 2 ${NOUN.toLowerCase()} tính được <b>tốc độ tăng thật</b> (xem/giờ giữa 2 lần quét).</p>
     ${kws.length ? `<div class="chips">${kws.map(k => `<span class="chip">${esc(PLATFORM[k.platform])}: ${esc(k.keyword || "tất cả")}
       <a ${act("removeViralKw", k.platform, k.keyword)} title="Bỏ tự quét"> ✕</a></span>`).join("")}</div>` : ""}`;
   const labelChips = `<div class="chips">${Object.entries(VLABEL).map(([k, [n, c]]) =>
@@ -275,7 +343,7 @@ function renderAlert(blocked) {
     title="${blocked[p] ? esc(blocked[p].reason) : "Đang quét bình thường"}"><i></i>${p === "facebook" ? "Facebook" : "TikTok"}</span>`).join("");
   $("#alert").innerHTML = keys.map(p => `<div class="alert"><div>⚠️</div><div>
       <b>${esc(blocked[p].reason)}</b> <span class="note">(${ago(blocked[p].ts)})</span><br>
-      Tiện ích đã <b>tạm dừng mọi lượt quét ${p === "facebook" ? "Facebook" : "TikTok"}</b> để bảo vệ tài khoản.
+      ${NOUN} đã <b>tạm dừng mọi lượt quét ${p === "facebook" ? "Facebook" : "TikTok"}</b> để bảo vệ tài khoản.
       Bấm "Mở trang để xác minh", tự làm theo hướng dẫn của ${p === "facebook" ? "Facebook" : "TikTok"},
       đóng tab, nên đợi vài tiếng rồi bấm "Đã xử lý, quét tiếp".</div>
       <div class="acts"><button class="small" ${act("openLogin", SITE[p])}>Mở trang để xác minh</button>
@@ -284,7 +352,7 @@ function renderAlert(blocked) {
 
 async function renderSafety() {
   const [{platforms, tips}, bundles] = await Promise.all([api("/api/safety"), api("/api/diag")]);
-  return `<p class="note">Tiện ích không che giấu việc tự động hoá. Nó giảm nguy cơ bị checkpoint bằng cách quét chậm như người thật,
+  return `<p class="note">${NOUN} không che giấu việc tự động hoá. Nó giảm nguy cơ bị checkpoint bằng cách quét chậm như người thật,
     giới hạn số lần quét mỗi ngày, và <b>dừng ngay</b> khi Facebook/TikTok hiện checkpoint, captcha hoặc bắt đăng nhập lại.</p>
     <div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(320px,1fr))">${platforms.map(p => `<div class="card">
       <div style="display:flex;align-items:center;gap:8px"><b style="font-size:16px">${esc(p.name)}</b>
@@ -325,11 +393,11 @@ async function renderNotify() {
       <div class="toolbar"><button class="small" ${act("findChat")}>Tự lấy chat ID</button>
         <button class="small" ${act("testNotify")}>Gửi thử</button>
         ${n.has_token ? `<button class="small" ${act("clearToken")}>Xoá token</button>` : ""}</div>
-      <p class="note" style="margin:0">Token chỉ lưu trong Chrome trên máy bạn.</p></div>
+      <p class="note" style="margin:0">Token chỉ lưu ${IS_EXT ? "trong Chrome " : ""}trên máy bạn.</p></div>
     <div class="card"><b style="font-size:16px">Báo khi nào</b>
       <form id="eventsForm" style="margin-top:8px">${Object.entries(EVENT_NAMES).map(([k, name]) =>
         `<label class="check" style="display:block"><input type="checkbox" name="${k}" ${n.events[k] ? "checked" : ""}> ${name}</label>`).join("")}
-        <label class="check" style="display:block;margin-top:10px"><input type="checkbox" name="desktop" ${n.desktop ? "checked" : ""}> Hiện thông báo góc màn hình (của Chrome)</label>
+        <label class="check" style="display:block;margin-top:10px"><input type="checkbox" name="desktop" ${n.desktop ? "checked" : ""}> Hiện thông báo góc màn hình ${IS_EXT ? "(của Chrome)" : "Windows"}</label>
         <button class="small" style="margin-top:10px">Lưu</button></form>
       <p class="note">Mỗi video chỉ báo 1 lần. Video đã có từ trước khi bật thông báo sẽ không bị báo lại.</p></div></div>`;
 }
@@ -347,7 +415,7 @@ async function clearToken() { await post("/api/notify", {telegram_token: ""}); r
 function diagSection(bundles) {
   const size = b => b < 1024 * 1024 ? (b / 1024).toFixed(0) + " KB" : (b / 1024 / 1024).toFixed(1) + " MB";
   return `<div class="card" style="margin-top:12px"><b>Gói chẩn đoán</b>
-    <p class="note">Tiện ích tự lưu khi 1 lượt quét ra 0 kết quả, lỗi, hoặc gặp checkpoint (giữ 15 gói gần nhất).
+    <p class="note">${NOUN} tự lưu khi 1 lượt quét ra 0 kết quả, lỗi, hoặc gặp checkpoint (giữ 15 gói gần nhất).
     Tải về và gửi cho người hỗ trợ để sửa nhanh. Email đã được che, nhưng trang có thể chứa <b>tên tài khoản</b> của bạn — xem trước khi gửi.</p>
     ${bundles.length ? `<table><tr><th>Lúc</th><th>Lượt quét</th><th>Lỗi</th><th>Phản hồi</th><th></th></tr>${bundles.map(b =>
       `<tr><td>${ago(b.ts)}</td><td>${esc(b.label || "")}</td><td>${esc((b.error || "").slice(0, 80))}</td><td>${b.responses ?? "?"} · ${size(b.size)}</td>
@@ -357,7 +425,7 @@ function diagSection(bundles) {
 
 async function resumePlatform(p) { await post(`/api/safety/resume/${p}`); pollJobs(); render(); }
 async function openLogin(site) {
-  try { await post(`/api/login/${site}`); }
+  try { await post(`/api/login/${site}`); if (!IS_EXT) alert("Đã mở cửa sổ trình duyệt của tool. Làm xong thì đóng cửa sổ đó."); }
   catch (e) { alert(e.message); }
 }
 
@@ -369,12 +437,26 @@ async function renderOverview() {
   const welcome = info.has_data ? (info.demo ? `<div class="card" style="margin-bottom:14px">Đang xem <b>dữ liệu mẫu</b>.
       Lượt quét thật đầu tiên sẽ tự xoá dữ liệu mẫu. <a ${act("setView", "scan")}><b>Quét từ khoá →</b></a></div>` : "")
     : `<div class="card" style="margin-bottom:14px"><b style="font-size:16px">Chào mừng tới SNAKEMEDIA POD 🐍</b>
-      <p class="note">Bắt đầu: đăng nhập Facebook trên Chrome này, rồi vào <a ${act("setView", "scan")}><b>Quét từ khoá</b></a>.
+      ${IS_EXT ? `<p class="note">Bắt đầu: đăng nhập Facebook trên Chrome này, rồi vào <a ${act("setView", "scan")}><b>Quét từ khoá</b></a>.
       Hoặc tự mở Thư viện quảng cáo Facebook và lướt — tiện ích tự lưu QC bạn xem.</p>
-      <button class="small" ${act("loadDemo")}>Xem thử với dữ liệu mẫu</button></div>`;
+      <button class="small" ${act("loadDemo")}>Xem thử với dữ liệu mẫu</button>`
+      : `<p class="note">Bắt đầu: đăng nhập Facebook 1 lần (menu Start → "Đăng nhập Facebook"), rồi vào
+      <a ${act("setView", "scan")}><b>Quét từ khoá</b></a>. Muốn xem thử trước: menu Start → "SNAKEMEDIA POD (dữ liệu demo)".</p>`}</div>`;
   const cards = s.labels.filter(l => l.key !== "theo_doi").map(l => `<a class="card" ${act("setView", l.key)}><div class="big">${l.count}</div>${l.name}</a>`).join("");
   const topN = niches.filter(n => n.sap_win + n.win + n.scale).slice(0, 6);
+  const tb = s.tabs || {};
+  const tabCard = (key, icon, name, n, sub) => `<a class="card" ${act("setView", key)}><div class="big">${n || 0}</div>${icon} ${name}<div class="note">${sub}</div></a>`;
   return welcome + `<div class="cards">${cards}</div>
+    <div class="cards">
+      ${tabCard("potential", "🌱", "Video Tiềm Năng", tb.potential, "vừa nhú, chưa chín")}
+      ${tabCard("cow", "🐄", "SP bò sữa", tb.cow, "chạy đều nhiều tuần")}
+      ${tabCard("dig", "⤓", "Chờ đào sâu", tb.dig, "Sắp WIN / Tiềm năng chưa đào")}
+      ${tabCard("stores", "🏪", "Store chờ soi", tb.stores, "shop đang chạy video hot")}
+    </div>
+    <div class="card" style="margin-bottom:14px"><b>Nên xem tab nào?</b> <span class="note">— tuỳ kênh bạn đang giỏi</span>
+      <div class="note" style="margin-top:6px">• <b>Chạy Facebook</b>: <a ${act("setView", "win")}>Video Win</a> + <a ${act("setView", "scale")}>Video scale</a> — hàng đã được nhiều shop chứng minh ra đơn và đang nhân bản.<br>
+      • <b>Chạy TikTok</b>: thêm <a ${act("setView", "potential")}>Video Tiềm Năng</a> — bắt con đang nhú trước khi trend tràn khắp nơi.<br>
+      • <b>Google Shopping / Search, SEO, sàn, free traffic</b>: <a ${act("setView", "cow")}>SP bò sữa</a> — hàng sống dai nhiều tuần.</div></div>
     <div class="cards">
       <a class="card" ${act("setView", "keywords")}><div class="note">Tự quét mỗi đêm</div>
         <b>${auto.enabled ? `Bật · ${auto.hour}h` : "Đang tắt"}</b><div class="note">${auto.keywords} từ khoá · ${auto.follows} page/shop<br>Lần gần nhất: ${auto.last_date || "chưa"}</div></a>
@@ -392,7 +474,7 @@ async function renderOverview() {
     • <b>Video già</b>: quảng cáo sớm nhất (tính cả QC đã tắt, mọi shop) quá 30 ngày.<br>
     • <b>POD</b>: nhận ra loại sản phẩm (áo, cốc, ornament…), niche (chó, mẹ, y tá…), hàng cá nhân hoá và app POD trên trang bán.<br>
     • Dấu <b>*</b> sau "URL x ngày" = tuổi trang là ước tính (không có dữ liệu ngày tạo trực tiếp).<br>
-    Các ngưỡng sửa trong <code>lib/config.js</code>, từ khoá POD/niche sửa trong <code>lib/pod.js</code> (thư mục tiện ích).</div></div>
+    Các ngưỡng sửa trong <code>${CONFIG_FILE}</code>, từ khoá POD/niche sửa trong <code>${IS_EXT ? "lib/pod.js" : "snakepod/pod.py"}</code>.</div></div>
     <h3>Lượt quét gần đây</h3>${scansTable(s.scans)}`;
 }
 
@@ -404,22 +486,32 @@ function scansTable(scans) {
 }
 
 async function renderScan() {
-  const [scans, passive] = await Promise.all([api("/api/scans"), api("/api/passive")]);
+  const [scans, passive, sug] = await Promise.all([api("/api/scans"),
+    IS_EXT ? api("/api/passive") : Promise.resolve(null), api("/api/keywords/suggest").catch(() => [])]);
   return `<form class="scan" id="scanForm">
       <input name="keyword" placeholder="Từ khoá, vd: personalized dog shirt, nurse mug…" required>
       <input name="country" value="US" size="3" title="Mã quốc gia">
       <input name="max_ads" type="number" value="300" style="width:90px" title="Số QC tối đa">
       <label class="note"><input type="checkbox" name="save" checked> Lưu để tự quét mỗi đêm</label>
       <button class="primary">Quét</button></form>
+    <form class="card" id="batchForm" style="margin:0 0 12px">
+      <b>Quét hàng loạt</b> <span class="note">— mỗi dòng 1 từ khoá, tool xếp hàng quét lần lượt (có nghỉ an toàn giữa các lượt)</span>
+      <textarea name="keywords" rows="4" placeholder="lawn mower&#10;garden ideas&#10;dog mom shirt" style="width:100%;margin:8px 0"></textarea>
+      <div class="toolbar" style="margin:0"><input name="country" value="US" size="3" title="Quốc gia">
+        <label class="note"><input type="checkbox" name="save" checked> Lưu để tự quét mỗi đêm</label>
+        <button class="primary small">Xếp hàng quét</button></div></form>
+    ${sug.length ? `<div class="note">Tự đào từ khoá — lấy từ tên sản phẩm / nội dung các video đang hot mà bạn chưa quét (bấm để thêm vào danh sách quét hàng loạt):</div>
+      <div class="chips">${sug.map(k => `<span class="chip g" ${act("addKw", k.keyword)} title="${esc(k.source)} · ${k.videos} video">${esc(k.keyword)} <small>${k.videos}</small></span>`).join("")}</div>` : ""}
     <div class="note">Gợi ý từ khoá POD (bấm để điền):</div>
     <div class="chips">${POD_KEYWORDS.map(k => `<span class="chip" ${act("fillKw", k)}>${esc(k)}</span>`).join("")}</div>
-    <p class="note">Tiện ích mở 1 cửa sổ Chrome, vào Thư viện quảng cáo Facebook, cuộn và đọc QC video (cả QC đã tắt).
-    <b>Để cửa sổ đó hiện trên màn hình đến khi quét xong</b> (Chrome ngừng tải trang bị thu nhỏ).
+    <p class="note">${IS_EXT ? `Tiện ích mở 1 cửa sổ Chrome, vào Thư viện quảng cáo Facebook, cuộn và đọc QC video (cả QC đã tắt).
+    <b>Để cửa sổ đó hiện trên màn hình đến khi quét xong</b> (Chrome ngừng tải trang bị thu nhỏ).`
+      : "Tool mở cửa sổ Chromium, vào Thư viện quảng cáo Facebook, cuộn và đọc QC video (cả QC đã tắt)."}
     Sau đó tải thumbnail để gom QC trùng video, đọc tuổi trang bán, nhận diện POD, rồi chấm lại. Có thể xếp hàng nhiều từ khoá.</p>
-    <div class="card" style="margin:12px 0"><label class="check"><input type="checkbox" data-change="passive" ${passive.enabled ? "checked" : ""}>
+    ${passive ? `<div class="card" style="margin:12px 0"><label class="check"><input type="checkbox" data-change="passive" ${passive.enabled ? "checked" : ""}>
       <b>Tự lưu khi lướt</b></label>
       <p class="note" style="margin:4px 0 0">Khi bạn tự mở Thư viện quảng cáo Facebook, TikTok hoặc TikTok Creative Center trên Chrome,
-      tiện ích lưu luôn các QC / video bạn lướt qua (không tính vào giới hạn quét, không tự cuộn).</p></div>
+      tiện ích lưu luôn các QC / video bạn lướt qua (không tính vào giới hạn quét, không tự cuộn).</p></div>` : ""}
     ${scansTable(scans)}`;
 }
 
@@ -459,12 +551,16 @@ async function renderKeywords() {
   return `<div class="card" style="margin-bottom:14px">
       <form class="toolbar" id="autoForm" style="margin:0">
         <label><input type="checkbox" name="enabled" ${auto.enabled ? "checked" : ""}> Tự quét mỗi đêm lúc</label>
-        <select name="hour">${hours}</select><button class="small">Lưu</button>
+        <select name="hour">${hours}</select>
+        <label class="note">+ soi <input name="stores" type="number" min="0" max="200" value="${auto.stores}" style="width:60px"> store/đêm</label>
+        <button class="small">Lưu</button>
         <button type="button" class="primary small" ${act("runAll")}>Quét tất cả ngay</button>
       </form>
-      <p class="note" style="margin-bottom:0">Mỗi đêm tiện ích quét lại ${auto.keywords} từ khoá dưới đây và ${auto.follows} page/shop ở
-      <a ${act("setView", "follows")}>Theo dõi đặc biệt</a>. Lần gần nhất: ${auto.last_date || "chưa"}.
-      <b>Chrome phải đang mở</b> (máy không tắt/ngủ) vào giờ đó. Lỡ giờ thì lần mở Chrome sau không tự bù.</p></div>
+      <p class="note" style="margin-bottom:0">Mỗi đêm ${NOUN.toLowerCase()} quét lại ${auto.keywords} từ khoá dưới đây và ${auto.follows} page/shop ở
+      <a ${act("setView", "follows")}>Theo dõi đặc biệt</a>, rồi soi thêm ${auto.stores} shop ở <a ${act("setView", "stores")}>Quét store win</a>.
+      Lần gần nhất: ${auto.last_date || "chưa"}.
+      ${IS_EXT ? "<b>Chrome phải đang mở</b> (máy không tắt/ngủ) vào giờ đó. Lỡ giờ thì lần mở Chrome sau không tự bù."
+        : '<b>Tool phải đang mở</b> (máy không tắt/ngủ) vào giờ đó. Bản cài đặt có tuỳ chọn "Tự mở cùng Windows".'}</p></div>
     <form class="toolbar" id="kwForm"><input name="keyword" placeholder="Thêm từ khoá…" required style="flex:1;min-width:200px">
       <input name="country" value="US" size="3"><button class="small">+ Thêm</button></form>
     ${kws.length ? `<div class="list"><table><tr><th>Từ khoá</th><th>Quốc gia</th><th>Quét lần cuối</th><th></th></tr>
@@ -474,10 +570,66 @@ async function renderKeywords() {
       : `<div class="empty">Chưa có từ khoá nào.</div>`}`;
 }
 
+let storeFilter = "pending";
+async function renderStores() {
+  const r = await api(`/api/stores?status=${storeFilter}&offset=${pageOffset}&limit=50`);
+  const sm = r.summary, auto = sm.auto;
+  const seg = (k, name, n) => `<button class="small ${storeFilter === k ? "on" : ""}" ${act("storeFilter", k)}>${name} <b>${n}</b></button>`;
+  const pct = sm.total ? Math.round(100 * sm.done / sm.total) : 0;
+  const head = `<p class="note">Soi mọi shop đang chạy video ở các tab Sắp WIN / Video Win / Video scale / Tiềm năng / Bò sữa / Video test / Theo dõi
+      để tìm sản phẩm khác của họ. Mỗi store = 1 lượt quét Facebook (tính vào giới hạn an toàn).</p>
+    <div class="cards">
+      <div class="card"><div class="big">${sm.total}</div>store win</div>
+      <div class="card"><div class="big">${sm.done} <small class="note">/ ${sm.total}</small></div>đã soi trong 7 ngày
+        <div class="bar" style="margin-top:8px"><i class="w" style="width:${pct}%"></i></div></div>
+      <div class="card"><div class="big green">+${sm.new_videos_7d}</div>video mới từ các lượt soi đó</div>
+      <div class="card"><div class="big">${auto.enabled ? String(auto.hour).padStart(2, "0") + ":00" : "tắt"}</div>ca đêm kế · ${auto.stores} store</div>
+    </div>
+    <div class="toolbar"><span class="seg">${seg("pending", "Chờ soi", sm.pending)}${seg("done", "Đã soi", sm.done)}${seg("all", "Tất cả", sm.total)}</span>
+      <span style="margin-left:auto" class="note">Soi</span><input id="sweepN" type="number" min="1" max="100" value="10" style="width:64px">
+      <button class="primary small" ${act("sweepStores")}>store đầu danh sách</button></div>`;
+  if (!r.items.length) return head + `<div class="list"><div class="empty">${storeFilter === "done" ? "Chưa soi store nào trong 7 ngày."
+    : "Chưa có store nào. Store xuất hiện khi có video Sắp WIN / Win / Scale / Tiềm năng / Bò sữa hoặc khi bạn theo dõi shop."}</div></div>`;
+  return head + `<div class="list"><table><tr><th>Store</th><th>Video đang ở tab</th><th class="num">Quảng cáo</th><th>Soi gần nhất</th>
+    <th class="num">Video mới</th><th></th></tr>
+    ${r.items.map(s => `<tr><td><a ${act("showScope", "shop", s.domain, s.domain)}><b>${esc(s.domain)}</b></a>
+        <br><small class="note">${esc(s.platform || "web khác")} · ${s.pages} page</small></td>
+      <td>${s.tabs.map(t => `<span class="chip g">${esc(t)}</span>`).join("")}</td>
+      <td class="num">${s.ads}</td>
+      <td>${s.swept_ts ? `<span class="chip ${s.status === "done" ? "g" : ""}">${ago(s.swept_ts)}</span>` : `<span class="chip o">Chưa soi</span>`}</td>
+      <td class="num">${s.new_videos == null ? "—" : s.new_videos ? `<b class="green">+${s.new_videos}</b>` : 0}</td>
+      <td><button class="small" ${act("sweepOne", s.domain)}>Soi</button></td></tr>`).join("")}</table></div>`
+    + storePager(r.total);
+}
+
+function storePager(total) {
+  if (total <= 50) return "";
+  const pages = Math.ceil(total / 50), cur = Math.floor(pageOffset / 50) + 1;
+  return `<div class="pager"><button class="small" ${cur > 1 ? act("goPage", pageOffset - 50) : "disabled"}>← Trước</button>
+    <span class="note">Trang ${cur} / ${pages} · ${total} store</span>
+    <button class="small" ${cur < pages ? act("goPage", pageOffset + 50) : "disabled"}>Sau →</button></div>`;
+}
+
+async function renderHistory() {
+  return `<p class="note">Mọi lượt quét / soi / đào gần đây (50 lượt).</p>${scansTable(await api("/api/scans"))}`;
+}
+
+async function renderData() {
+  return `<div class="cards" style="grid-template-columns:repeat(auto-fill,minmax(340px,1fr))">
+    <div class="card"><b style="font-size:16px">Xuất kho của bạn</b>
+      <p class="note">Tải toàn bộ QC + tuổi trang bán đã quét ra 1 file .json để gửi cho đồng đội (không có Telegram, tài khoản hay mật khẩu).</p>
+      <button class="primary small" ${act("exportData")}>⇩ Tải file dữ liệu</button></div>
+    <div class="card"><b style="font-size:16px">Gộp kho của đồng đội</b>
+      <p class="note">Mỗi người quét ngách của mình, gộp lại thì đếm được nhiều page / shop chạy cùng 1 video hơn hẳn quét lẻ.
+      QC trùng không bị nhân đôi; mốc chạy sớm nhất và trạng thái mới nhất được giữ.</p>
+      <input type="file" id="importFile" accept=".json,application/json">
+      <button class="small" ${act("importData")}>⇧ Gộp vào kho</button></div></div>`;
+}
+
 async function renderShops() {
   const rows = await api("/api/shops");
   if (!rows.length) return `<div class="empty">Chưa có shop nào. Hãy quét vài từ khoá trước.</div>`;
-  return `<p class="note">Mọi shop (domain trang bán) tiện ích từng thấy. Bấm + để theo dõi (★ = đang theo dõi), bấm tên để xem video của shop.</p>
+  return `<p class="note">Mọi shop (domain trang bán) ${NOUN.toLowerCase()} từng thấy. Bấm + để theo dõi (★ = đang theo dõi), bấm tên để xem video của shop.</p>
     <div class="list"><table><tr><th></th><th>Shop</th><th>Nền tảng</th><th class="num">QC đang chạy</th><th class="num">Page</th>
     <th class="num">Video</th><th class="num">Sắp WIN/Win</th><th>QC đầu tiên</th><th>QC mới nhất</th></tr>
     ${rows.map(r => `<tr><td><button class="follow ${r.followed ? "on" : ""}" ${act("toggleFollow", "shop", r.domain, r.domain, r.followed)} title="${r.followed ? "Bỏ theo dõi" : "Theo dõi"}">${r.followed ? "★" : "+"}</button></td>
@@ -487,19 +639,21 @@ async function renderShops() {
       <td class="num ${r.hot ? "green" : ""}">${r.hot}</td><td>${fmtDate(r.first_ts)}</td><td>${fmtDate(r.last_ts)}</td></tr>`).join("")}</table></div>`;
 }
 
-const VIEWS = {notify: renderNotify, safety: renderSafety, viral: renderViral, spread: () => renderList(null, {spread: "true"}), overview: renderOverview, scan: renderScan, niches: renderNiches, follows: renderFollows,
+const VIEWS = {stores: renderStores, history: renderHistory, data: renderData,
+  potential: () => renderList(null, {tab: "potential"}), cow: () => renderList(null, {tab: "cow"}), test: () => renderList(null, {tab: "test"}),
+  hidden: () => renderList(null, {tab: "hidden"}), dig: () => renderList(null, {tab: "dig"}), notify: renderNotify, safety: renderSafety, viral: renderViral, spread: () => renderList(null, {spread: "true"}), overview: renderOverview, scan: renderScan, niches: renderNiches, follows: renderFollows,
   keywords: renderKeywords, shops: renderShops};
 
 async function render() {
   document.querySelectorAll("#nav a").forEach(a => a.classList.toggle("on", a.dataset.view === view));
   $("#title").textContent = TITLES[view] || (LABEL[view] || [view])[0];
-  $("#search").classList.toggle("hidden", !!VIEWS[view] && !["viral", "spread"].includes(view));
+  $("#search").classList.toggle("hidden", !!VIEWS[view] && !["viral", "spread", ...TABS].includes(view));
   let html;
   try {
     html = VIEWS[view] ? await VIEWS[view]() : await renderList(view === "all" ? null : view);
   } catch (e) { html = `<div class="empty">Lỗi tải dữ liệu: ${esc(e.message)}</div>`; }
   $("#content").innerHTML = html;
-  document.querySelectorAll(".row[data-cid], .gcard[data-cid]").forEach(r => r.onclick = () => openDrawer(r.dataset.cid));
+  document.querySelectorAll(".row[data-cid], .gcard[data-cid], .vrow[data-cid]").forEach(r => r.onclick = () => openDrawer(r.dataset.cid));
   document.querySelectorAll(".row[data-vid], .gcard[data-vid]").forEach(r => r.onclick = () => openSocial(r.dataset.vid));
   document.querySelectorAll(".gcard[data-video]").forEach(card => {
     card.onmouseenter = () => {
@@ -546,7 +700,13 @@ function bindForms() {
     const events = Object.fromEntries(Object.keys(EVENT_NAMES).map(k => [k, !!d[k]]));
     await post("/api/notify", {events, desktop: !!d.desktop}); alert("Đã lưu"); render();
   });
-  on("#autoForm", async d => { await post("/api/autoscan", {enabled: !!d.enabled, hour: +d.hour}); render(); });
+  on("#autoForm", async d => { await post("/api/autoscan", {enabled: !!d.enabled, hour: +d.hour, stores: +d.stores}); render(); });
+  on("#batchForm", async (d, f) => {
+    const keywords = d.keywords.split(/\n/).map(x => x.trim()).filter(Boolean);
+    if (!keywords.length) return alert("Nhập ít nhất 1 từ khoá");
+    const r = await post("/api/scan", {keywords, country: d.country, max_ads: 300, save: !!d.save});
+    f.keywords.value = ""; pollJobs(); alert(`Đã xếp ${r.queued} từ khoá vào hàng quét.`); render();
+  });
 }
 
 async function toggleFollow(kind, key, name, isOn) {
@@ -563,24 +723,47 @@ async function runAll() { const r = await post("/api/autoscan/run"); pollJobs();
 
 async function openDrawer(cid) {
   openCid = cid; openVid = null;
-  document.querySelectorAll(".row").forEach(r => r.classList.toggle("on", r.dataset.cid === cid));
+  document.querySelectorAll(".row, .vrow").forEach(r => r.classList.toggle("on", r.dataset.cid === cid));
   const v = await api(`/api/videos/${enc(cid)}`);
   const [ln, cls] = LABEL[v.label] || [v.label, ""];
   const b = v.buckets, tot = Math.max(1, b.old + b.win + b.scale);
   const pct = n => (100 * n / tot).toFixed(1) + "%";
   const img = thumb(v) ? `<img class="hero" src="${esc(thumb(v))}">` : `<div class="hero"></div>`;
   const src = v.landing_date_source ? ` <small class="note">(${DATE_SOURCE[v.landing_date_source] || v.landing_date_source})</small>` : "";
+  const marks = v.marks || [], isTest = marks.includes("test"), isHidden = marks.includes("hidden");
+  const digChip = v.dug_ts ? `<span class="chip g">Đã đào ${ago(v.dug_ts)}</span>`
+    : (v.label === "sap_win" || v.potential) ? `<span class="chip o">${v.label === "sap_win" ? "Sắp WIN" : "Tiềm năng"} · chưa đào</span>` : "";
+  const hist = v.history || [];
+  const dlt = (i, k) => i + 1 < hist.length && hist[i][k] !== hist[i + 1][k] ? " " + plus(hist[i][k] - hist[i + 1][k]) : "";
+  const histTable = hist.length ? `<h3>Lịch sử theo dõi <small class="note">(mỗi ngày 1 dòng, lần chấm sau cùng trong ngày)</small></h3>
+    <table><tr><th>Ngày</th><th>Fanpage chạy</th><th>Shop sống</th><th>Win</th><th>Scale</th><th>URL</th></tr>
+    ${hist.map((h, i) => `<tr><td>${esc(h.day.slice(8, 10) + "/" + h.day.slice(5, 7))}</td><td>${h.pages_active}${dlt(i, "pages_active")}</td>
+      <td>${h.shops_active}${dlt(i, "shops_active")}</td><td>${h.shops_win}${dlt(i, "shops_win")}</td>
+      <td>${h.scale}${dlt(i, "scale")}</td><td>${h.urls}${dlt(i, "urls")}</td></tr>`).join("")}</table>` : "";
+  const pages = v.sell_pages || [];
+  const sellList = pages.length ? `<h3>Đang bán ở ${v.urls_total} trang</h3>
+    <table>${pages.map(pg => `<tr><td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+      <a target="_blank" rel="noopener" href="${esc(pg.url)}">${esc(pg.url.replace(/^https?:\/\/(www\.)?/, ""))}</a></td>
+      <td><small class="note">${esc(pg.platform || "")}</small></td>
+      <td class="num">${pg.price ? "$" + esc(pg.price) : ""}${pg.compare_price ? ` <s class="note">$${esc(pg.compare_price)}</s>` : ""}</td>
+      <td class="num"><small class="note">${pg.created_ts ? "tạo " + dm(pg.created_ts) : ""}</small></td><td class="num">${pg.ads} QC</td></tr>`).join("")}</table>` : "";
+  const sourcing = (v.sourcing || []).length ? `<h3>Tìm nguồn hàng</h3><div>${v.sourcing.map(x =>
+    `<a class="btn small" target="_blank" rel="noopener" href="${esc(x.url)}" style="margin:0 6px 6px 0">${esc(x.name)} ↗</a>`).join("")}</div>
+    <p class="note" style="margin-top:2px">Tìm theo tên sản phẩm / ảnh để hỏi giá xưởng hoặc bên fulfill của bạn (tool không nhận hoa hồng từ bên nào).</p>` : "";
   const followBtn = (kind, key, name, on) =>
     `<button class="follow ${on ? "on" : ""}" ${act("toggleFollow", kind, key, name, on)} title="${on ? "Bỏ theo dõi" : "Theo dõi"}">${on ? "★" : "+"} ${esc(name)}</button>`;
   $("#drawer").innerHTML = `<button class="x" ${act("closeDrawer")}>✕</button>${img}
     <h2>${esc(v.title)}</h2>
     <div><span class="chip ${cls}">${ln}</span>${podChips(v)}${v.platform ? `<span class="chip">${esc(v.platform)}</span>` : ""}
+${tabChips(v)}${digChip}
       <span class="note"> · ${v.pages_total} Trang · ${v.shops_total} shop · quét ${ago(v.last_seen)}</span></div>
     <div class="btns">
       <a class="btn primary" target="_blank" rel="noopener" href="${esc(v.video_url || v.ad_library_url)}">▶ Xem video</a>
       ${v.main_link ? `<a class="btn" target="_blank" rel="noopener" href="${esc(v.main_link)}">Mở URL bán ↗</a>` : `<span class="btn">Không có URL bán</span>`}
       <a class="btn" target="_blank" rel="noopener" href="${esc(v.ad_library_url)}">Xem trên Thư viện QC</a>
       <button ${act("dig", v.cid)}>⤓ Đào sâu</button>
+      <button ${act("mark", v.cid, "test", !isTest)}>${isTest ? "✓ Đang test" : "+ Video test"}</button>
+      <button ${act("mark", v.cid, "hidden", !isHidden)}>${isHidden ? "Bỏ ẩn" : "🙈 Ẩn video"}</button>
     </div>
     <h3>Sức sống quảng cáo (đang chạy)</h3>
     <div class="boxes">
@@ -603,6 +786,11 @@ async function openDrawer(cid) {
     <div class="kv"><span>Quảng cáo mỗi ngày<br><small class="note">${v.ads_total} QC từ ${fmtDate(v.first_ts)}</small></span><b>${v.ads_per_day}</b></div>
     <h3>Vì sao có nhãn này</h3>
     ${v.checks.map(c => `<div class="check">${c.ok === true ? "✅" : c.ok === false ? "❌" : "➖"} ${esc(c.text)}</div>`).join("")}
+    ${(v.flag_checks || []).map(c => `<div class="check">${c.ok ? "✅" : "➖"} ${esc(c.text)}</div>`).join("")}
+    ${histTable}
+    ${v.price ? `<div class="kv"><span>Giá đang bán</span><b>$${esc(v.price)}${v.compare_price ? ` <s class="note">$${esc(v.compare_price)}</s>` : ""}</b></div>` : ""}
+    ${sellList}
+    ${sourcing}
     <h3>Theo dõi shop (${v.shop_list.length})</h3>
     <div>${v.shop_list.map(s => followBtn("shop", s.domain, s.domain, s.followed)).join("") || "—"}</div>
     <h3>Theo dõi page (${v.page_list.length})</h3>
@@ -616,7 +804,7 @@ async function openDrawer(cid) {
 }
 
 function closeDrawer() { openCid = openVid = null; $("#drawer").classList.add("hidden");
-  document.querySelectorAll(".row.on").forEach(r => r.classList.remove("on")); }
+  document.querySelectorAll(".row.on, .vrow.on").forEach(r => r.classList.remove("on")); }
 async function dig(cid) { await post(`/api/videos/${enc(cid)}/dig`); pollJobs(); }
 
 $("#logbar").onclick = e => { if (e.target.id !== "stopBtn") $("#log").classList.toggle("hidden"); };
@@ -640,6 +828,7 @@ async function pollJobs() {
 }
 
 async function downloadDiag(name) {
+  if (!IS_EXT) { location.href = `/api/diag/${enc(name)}/download`; return; }
   const {filename, base64} = await api(`/api/diag/${enc(name)}/download`);
   const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
   const url = URL.createObjectURL(new Blob([bytes], {type: "application/zip"}));
@@ -661,7 +850,45 @@ document.addEventListener("change", e => {
   if (el) CHANGES[el.dataset.change](el);
 });
 
-const ACTIONS = {findChat, downloadDiag, loadDemo, setView, closeDrawer, runAll, clearScope: () => clearScope(), testNotify, clearToken, resumePlatform, openLogin, goSafety: () => setView("safety"), openSocial, removeViralKw, viralFilter: (k, val) => { viralFilters[k] = val; pageOffset = 0; render(); }, setLayout, goPage,
+async function mark(cid, kind, on) {
+  await post("/api/marks", {cid, kind, on});
+  if (kind === "hidden" && on) closeDrawer(); else openDrawer(cid);
+  render();
+}
+async function digBatch() {
+  const r = await post("/api/dig/batch", {n: +($("#digN") || {}).value || 5});
+  pollJobs(); alert(`Đã xếp ${r.queued} video vào hàng đào sâu.`);
+}
+async function sweepStores() {
+  const r = await post("/api/stores/sweep", {n: +($("#sweepN") || {}).value || 10});
+  pollJobs(); alert(`Đã xếp ${r.queued} store vào hàng soi.`); render();
+}
+async function sweepOne(domain) { await post("/api/stores/sweep", {domains: [domain]}); pollJobs(); }
+function saveFile(name, text, type) {
+  const url = URL.createObjectURL(new Blob([text], {type}));
+  const a = Object.assign(document.createElement("a"), {href: url, download: name});
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+async function exportData() {
+  const data = await api("/api/export");
+  saveFile(`snakemedia-pod-${new Date().toISOString().slice(0, 10)}.json`, JSON.stringify(data), "application/json");
+}
+async function importData() {
+  const f = ($("#importFile") || {}).files && $("#importFile").files[0];
+  if (!f) return alert("Chọn file .json đồng đội gửi trước đã");
+  let data;
+  try { data = JSON.parse(await f.text()); } catch { return alert("File không phải JSON hợp lệ"); }
+  try {
+    const r = await post("/api/import", data);
+    pollJobs(); alert(`Đã gộp ${r.ads} QC mới và ${r.landings} trang bán. Đang chấm lại…`);
+  } catch (e) { alert(e.message); }
+}
+
+const ACTIONS = {findChat, downloadDiag, loadDemo, setView, closeDrawer, runAll, clearScope: () => clearScope(),
+  mark, digBatch, sweepStores, sweepOne, exportData, importData,
+  storeFilter: k => { storeFilter = k; pageOffset = 0; render(); },
+  addKw: k => { const ta = $("#batchForm [name=keywords]"); ta.value = (ta.value.trim() ? ta.value.trim() + "\n" : "") + k; }, testNotify, clearToken, resumePlatform, openLogin, goSafety: () => setView("safety"), openSocial, removeViralKw, viralFilter: (k, val) => { viralFilters[k] = val; pageOffset = 0; render(); }, setLayout, goPage,
   sameProduct: (key) => { filters.product = key; filters.scopeName = "cùng sản phẩm " + key; closeDrawer(); setView("all"); }, showScope, toggleFollow, unfollow, scanFollow, scanKw, removeKw, dig, openDrawer,
   niche: (n, pod) => { filters.niche = n; if (pod) filters.pod = true; closeDrawer(); setView("all"); },
   fillKw: k => { $("#scanForm [name=keyword]").value = k; }};

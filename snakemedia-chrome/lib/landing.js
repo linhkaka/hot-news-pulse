@@ -66,6 +66,7 @@ export function parseShopifyProduct(data) {
     published_ts: isoTs(p.published_at),
     title: p.title ?? null,
     price: variants.length ? variants[0].price ?? null : null,
+    compare_price: variants.length ? variants[0].compare_at_price || null : null,
   };
 }
 
@@ -100,7 +101,8 @@ async function fetchText(url, timeoutMs = 20000) {
 
 export async function check(url) {
   const info = {url, final_url: null, domain: null, platform: null, created_ts: null, published_ts: null, title: null,
-    price: null, checked_ts: Math.floor(Date.now() / 1000), error: null, date_source: null, pod_markers: null};
+    price: null, checked_ts: Math.floor(Date.now() / 1000), error: null, date_source: null, pod_markers: null,
+    compare_price: null};
   try {
     const r = await fetchText(url);
     const html = r.text;

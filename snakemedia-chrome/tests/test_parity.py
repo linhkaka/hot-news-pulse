@@ -59,13 +59,13 @@ def _random_ads(seed, n=400):
                 landings[f"https://{shop}/products/{prod}"] = {
                     "created_ts": NOW - rnd.randrange(0, 30 * DAY) if rnd.random() > 0.2 else None,
                     "date_source": rnd.choice(["api", "uuid", "anh"]), "title": rnd.choice([None, "Gift Tee", "Wine glass"]),
-                    "price": "19.99", "platform": rnd.choice([None, "shopify", "printify", "shoplazza"]),
+                    "price": "19.99", "compare_price": rnd.choice([None, "39.99"]), "platform": rnd.choice([None, "shopify", "printify", "shoplazza"]),
                     "pod_markers": rnd.choice([None, "customily", "printify,teeinblue"])}
     return ads, landings
 
 
 def test_build_videos_matches_python(ext):
-    labels = set()
+    labels, flags = set(), set()
     for seed in range(4):
         ads, landings = _random_ads(seed)
         py = analyze.build_videos([dict(a) for a in ads], landings, now=NOW)
@@ -73,7 +73,9 @@ def test_build_videos_matches_python(ext):
         assert len(py) == len(js) > 20
         _close(sorted(py, key=lambda v: v["cid"]), sorted(js, key=lambda v: v["cid"]), f"seed{seed}")
         labels |= {v["label"] for v in py}
+        flags |= {k for v in py for k in ("potential", "cash_cow") if v[k]} | ({"compare"} if any(v["compare_price"] for v in py) else set())
     assert labels == {"sap_win", "win", "scale", "theo_doi", "trang_cu", "cu"}     # dữ liệu thử đủ mọi nhãn
+    assert flags == {"potential", "cash_cow", "compare"}                            # ... và đủ tab Tiềm năng / Bò sữa
 
 
 def test_cluster_matches_python(ext):

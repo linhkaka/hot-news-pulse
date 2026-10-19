@@ -2,7 +2,7 @@
 // Dữ liệu nằm trong hồ sơ Chrome của bạn; gỡ tiện ích là mất dữ liệu.
 
 const NAME = "snakepod";
-const VERSION = 1;
+const VERSION = 2;   // 2: lịch sử theo dõi, Video test / Đã ẩn, đã đào, quét store win
 let _db = null;
 
 const STORES = {
@@ -20,6 +20,10 @@ const STORES = {
   scans: {autoIncrement: true, keyPath: "id"},
   thumbs: {keyPath: "name"},
   diag: {keyPath: "name"},
+  video_history: {keyPath: ["cid", "day"], indexes: ["cid"]},
+  marks: {keyPath: ["cid", "kind"], indexes: ["cid"]},
+  digs: {keyPath: "cid"},
+  stores: {keyPath: "domain"},
 };
 
 export const now = () => Math.floor(Date.now() / 1000);
@@ -128,7 +132,7 @@ export async function uncheckedLandingUrls(maxAgeS = 3 * 86400) {
 }
 
 export async function saveLanding(info) {
-  await put("landings", {date_source: null, pod_markers: null, ...info});
+  await put("landings", {date_source: null, pod_markers: null, compare_price: null, ...info});
 }
 
 export async function landingsByUrl() {
@@ -350,4 +354,118 @@ export async function thumbData(names) {
   if (!want.length) return {};
   const rows = await tx("thumbs", "readonly", s => Promise.all(want.map(n => req(s.thumbs.get(n)))));
   return Object.fromEntries(rows.filter(Boolean).map(r => [r.name, r.data]));
+}
+
+
+// ---- lịch sử theo dõi mỗi video (chụp 1 lần mỗi ngày, lần chấm sau cùng trong ngày ghi đè) ----
+
+const KEYED = ["video_history", "marks", "digs"];
+
+// Nhóm QC gộp thêm QC mới thì mã video (cid = mã QC nhỏ nhất) có thể đổi. Mã cũ vẫn là 1 QC trong nhóm,
+// nên chuyển lịch sử / đánh dấu / đã đào của mã cũ sang mã mới.
+export async function rekey(videos) {
+  await tx(KEYED, "readwrite", async s => {
+    const rows = {};
+    for (const t of KEYED) rows[t] = await req(s[t].getAll());
+    const known = new Set(KEYED.flatMap(t => rows[t].map(r => r.cid)));
+    for (const v of videos) {
+      const olds = v.ads.map(a => a.ad_id).filter(id => id !== v.cid && known.has(id));
+      for (const old of olds) for (const t of KEYED) for (const r of rows[t].filter(x => x.cid === old)) {
+        const key = t === "video_history" ? [old, r.day] : t === "marks" ? [old, r.kind] : old;
+        const newKey = t === "video_history" ? [v.cid, r.day] : t === "marks" ? [v.cid, r.kind] : v.cid;
+        if (!(await req(s[t].get(newKey)))) s[t].put({...r, cid: v.cid});
+        s[t].delete(key);
+      }
+    }
+  });
+}
+
+export async function recordHistory(videos, day) {
+  await tx("video_history", "readwrite", s => {
+    for (const v of videos) s.video_history.put({cid: v.cid, day, pages_active: v.pages_active, shops_active: v.shops_active,
+      shops_win: v.shops_win, scale: v.buckets.scale, ads_active: v.ads_active, urls: v.urls_total || 0});
+  });
+}
+
+// {cid: [{day, pages_active, ...}] mới nhất trước}
+export async function history(cids, limitDays = null) {
+  const out = Object.fromEntries(cids.map(c => [c, []]));
+  if (!cids.length) return out;
+  await tx("video_history", "readonly", s => Promise.all(cids.map(async c => {
+    const rows = (await req(s.video_history.index("cid").getAll(c))).sort((a, b) => (a.day < b.day ? 1 : -1));
+    out[c] = limitDays === null ? rows : rows.slice(0, limitDays);
+  })));
+  return out;
+}
+
+// ---- Video test / Đã ẩn ----
+
+export async function setMark(cid, kind, on) {
+  if (on) await put("marks", {cid, kind, ts: now()});
+  else await del("marks", [cid, kind]);
+}
+
+// {cid: Set('test', 'hidden')}
+export async function marks() {
+  const out = {};
+  for (const r of await getAll("marks")) (out[r.cid] ||= new Set()).add(r.kind);
+  return out;
+}
+
+// ---- đào sâu ----
+
+export const markDug = cid => put("digs", {cid, ts: now()});
+export async function digs() {
+  return Object.fromEntries((await getAll("digs")).map(r => [r.cid, r.ts]));
+}
+
+// ---- quét store win ----
+
+export const saveStoreSweep = (domain, adsFound, newVideos) =>
+  put("stores", {domain, swept_ts: now(), ads_found: adsFound, new_videos: newVideos});
+export async function storeSweeps() {
+  return Object.fromEntries((await getAll("stores")).map(r => [r.domain, r]));
+}
+
+// ---- góp kho: xuất / nhập dữ liệu (cùng định dạng với bản app, dùng chung được) ----
+
+const AD_COLS = ["ad_id", "collation_id", "collation_count", "page_id", "page_name", "start_ts", "end_ts", "is_active",
+  "title", "body", "link_url", "domain", "thumb_url", "video_url", "dhash", "keyword", "first_seen", "last_seen"];
+const LANDING_COLS = ["url", "final_url", "domain", "platform", "created_ts", "published_ts", "title", "price", "checked_ts",
+  "error", "date_source", "pod_markers", "compare_price"];
+const pick = (o, cols) => Object.fromEntries(cols.map(k => [k, o[k] ?? null]));
+
+export async function exportData() {
+  return {format: "snakemedia-pod", version: 1, exported_ts: now(),
+    ads: (await allAds()).map(a => pick(a, AD_COLS)), landings: (await getAll("landings")).map(l => pick(l, LANDING_COLS))};
+}
+
+// Gộp dữ liệu người khác xuất ra: QC mới thì thêm, QC đã có thì lấy mốc sớm nhất / trạng thái mới nhất,
+// trang bán lấy bản đọc gần nhất. Trả về [số QC mới, số trang bán cập nhật].
+export async function importData(data) {
+  if (!data || typeof data !== "object" || data.format !== "snakemedia-pod") throw new RangeError("File không phải dữ liệu SNAKEMEDIA POD");
+  let newAds = 0, newLands = 0;
+  await tx(["ads", "landings"], "readwrite", async s => {
+    for (const a of data.ads || []) {
+      if (!a || typeof a !== "object" || !a.ad_id) continue;
+      const row = pick(a, AD_COLS);
+      row.ad_id = String(row.ad_id);
+      const old = await req(s.ads.get(row.ad_id));
+      if (!old) { s.ads.put({...row, thumb_path: null}); newAds++; continue; }
+      const starts = [old.start_ts, row.start_ts].filter(Boolean);
+      const newer = (row.last_seen || 0) > (old.last_seen || 0);
+      s.ads.put({...old, start_ts: starts.length ? Math.min(...starts) : null, dhash: coalesce(old.dhash, row.dhash),
+        thumb_url: coalesce(old.thumb_url, row.thumb_url), video_url: coalesce(old.video_url, row.video_url),
+        is_active: newer ? row.is_active : old.is_active, end_ts: newer ? row.end_ts : old.end_ts,
+        last_seen: Math.max(old.last_seen || 0, row.last_seen || 0)});
+    }
+    for (const l of data.landings || []) {
+      if (!l || typeof l !== "object" || !l.url) continue;
+      const old = await req(s.landings.get(l.url));
+      if (old && (old.checked_ts || 0) >= (l.checked_ts || 0)) continue;
+      s.landings.put(pick(l, LANDING_COLS));
+      newLands++;
+    }
+  });
+  return [newAds, newLands];
 }

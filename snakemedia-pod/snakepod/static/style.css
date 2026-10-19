@@ -125,3 +125,12 @@ footer pre{max-height:220px;overflow:auto;font-size:12px;margin:8px 0 0;white-sp
 .seg{display:inline-flex}.seg button{border-radius:0}.seg button:first-child{border-radius:8px 0 0 8px}
 .seg button:last-child{border-radius:0 8px 8px 0;margin-left:-1px}.seg button.on{background:var(--brand-soft);border-color:var(--brand);color:var(--brand-ink)}
 button[disabled]{opacity:.45;cursor:default}
+
+/* ---------- bảng số liệu (SP bò sữa / kiểu xem Bảng) ---------- */
+table.vt td{vertical-align:middle}
+table.vt .vcell{display:flex;gap:10px;align-items:center;min-width:260px;max-width:420px}
+table.vt .vcell img,table.vt .vcell .ph{width:52px;height:52px;border-radius:9px;object-fit:cover;flex-shrink:0;background:var(--soft)}
+table.vt .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+tr.vrow{cursor:pointer}
+tr.vrow:hover,tr.vrow.on{background:var(--soft)}
+#batchForm textarea{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--text);resize:vertical}

@@ -119,6 +119,33 @@ CREATE TABLE IF NOT EXISTS notified (
     ts INTEGER,
     PRIMARY KEY (kind, key)
 );
+CREATE TABLE IF NOT EXISTS video_history (
+    cid TEXT,                      -- video (đổi tên tự động khi nhóm QC gộp thêm)
+    day TEXT,                      -- YYYY-MM-DD (giờ máy)
+    pages_active INTEGER,
+    shops_active INTEGER,
+    shops_win INTEGER,
+    scale INTEGER,
+    ads_active INTEGER,
+    urls INTEGER,
+    PRIMARY KEY (cid, day)
+);
+CREATE TABLE IF NOT EXISTS marks (
+    cid TEXT,
+    kind TEXT,                     -- 'test' (Video test) | 'hidden' (Đã ẩn)
+    ts INTEGER,
+    PRIMARY KEY (cid, kind)
+);
+CREATE TABLE IF NOT EXISTS digs (
+    cid TEXT PRIMARY KEY,
+    ts INTEGER
+);
+CREATE TABLE IF NOT EXISTS stores (
+    domain TEXT PRIMARY KEY,
+    swept_ts INTEGER,
+    ads_found INTEGER,
+    new_videos INTEGER
+);
 CREATE TABLE IF NOT EXISTS scans (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     kind TEXT,
@@ -150,7 +177,8 @@ def connect():
 
 
 # Cột thêm ở các bản sau: CSDL cũ được nâng cấp tự động, không mất dữ liệu
-_MIGRATIONS = [("landings", "date_source", "TEXT"), ("landings", "pod_markers", "TEXT")]
+_MIGRATIONS = [("landings", "date_source", "TEXT"), ("landings", "pod_markers", "TEXT"),
+               ("landings", "compare_price", "TEXT")]
 
 
 def init():
@@ -213,10 +241,10 @@ def save_landing(info):
     with _lock, connect() as conn:
         conn.execute(
             """INSERT OR REPLACE INTO landings (url, final_url, domain, platform, created_ts, published_ts,
-                   title, price, checked_ts, error, date_source, pod_markers)
+                   title, price, checked_ts, error, date_source, pod_markers, compare_price)
                VALUES (:url, :final_url, :domain, :platform, :created_ts, :published_ts,
-                   :title, :price, :checked_ts, :error, :date_source, :pod_markers)""",
-            {"date_source": None, "pod_markers": None, **info})
+                   :title, :price, :checked_ts, :error, :date_source, :pod_markers, :compare_price)""",
+            {"date_source": None, "pod_markers": None, "compare_price": None, **info})
 
 
 def landings_by_url():
@@ -477,3 +505,144 @@ def ads_first_seen_since(column, value, since):
     assert column in ("page_id", "domain")
     with connect() as conn:
         return conn.execute(f"SELECT COUNT(*) FROM ads WHERE {column}=? AND first_seen>=?", (value, since)).fetchone()[0]
+
+
+# ---- lịch sử theo dõi mỗi video (chụp 1 lần mỗi ngày, lần chấm sau cùng trong ngày ghi đè) ----
+
+_KEYED = ("video_history", "marks", "digs")
+
+
+def rekey(videos):
+    """Nhóm QC gộp thêm QC mới thì mã video (cid = mã QC nhỏ nhất) có thể đổi. Mã cũ vẫn là 1 QC trong nhóm,
+    nên chuyển lịch sử / đánh dấu / đã đào của mã cũ sang mã mới."""
+    with _lock, connect() as conn:
+        known = set()
+        for t in _KEYED:
+            known |= {r[0] for r in conn.execute(f"SELECT DISTINCT cid FROM {t}")}
+        for v in videos:
+            olds = {a["ad_id"] for a in v["ads"]} & known - {v["cid"]}
+            for old in olds:
+                for t in _KEYED:
+                    conn.execute(f"UPDATE OR IGNORE {t} SET cid=? WHERE cid=?", (v["cid"], old))
+                    conn.execute(f"DELETE FROM {t} WHERE cid=?", (old,))
+
+
+def record_history(videos, day):
+    with _lock, connect() as conn:
+        conn.executemany(
+            "INSERT OR REPLACE INTO video_history VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            [(v["cid"], day, v["pages_active"], v["shops_active"], v["shops_win"], v["buckets"]["scale"],
+              v["ads_active"], v.get("urls_total", 0)) for v in videos])
+
+
+def history(cids, limit_days=None):
+    """{cid: [{day, pages_active, ...}] mới nhất trước}"""
+    cids = list(cids)
+    out = {c: [] for c in cids}
+    if not cids:
+        return out
+    with connect() as conn:
+        for i in range(0, len(cids), 500):
+            chunk = cids[i:i + 500]
+            q = "SELECT * FROM video_history WHERE cid IN (%s) ORDER BY day DESC" % ",".join("?" * len(chunk))
+            for r in conn.execute(q, chunk):
+                if limit_days is None or len(out[r["cid"]]) < limit_days:
+                    out[r["cid"]].append(dict(r))
+    return out
+
+
+# ---- Video test / Đã ẩn ----
+
+def set_mark(cid, kind, on):
+    with _lock, connect() as conn:
+        if on:
+            conn.execute("INSERT OR REPLACE INTO marks (cid, kind, ts) VALUES (?, ?, ?)", (cid, kind, int(time.time())))
+        else:
+            conn.execute("DELETE FROM marks WHERE cid=? AND kind=?", (cid, kind))
+
+
+def marks():
+    """{cid: {'test', 'hidden'}}"""
+    out = {}
+    with connect() as conn:
+        for r in conn.execute("SELECT cid, kind FROM marks"):
+            out.setdefault(r[0], set()).add(r[1])
+    return out
+
+
+# ---- đào sâu ----
+
+def mark_dug(cid):
+    with _lock, connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO digs (cid, ts) VALUES (?, ?)", (cid, int(time.time())))
+
+
+def digs():
+    with connect() as conn:
+        return {r[0]: r[1] for r in conn.execute("SELECT cid, ts FROM digs")}
+
+
+# ---- quét store win ----
+
+def save_store_sweep(domain, ads_found, new_videos):
+    with _lock, connect() as conn:
+        conn.execute("INSERT OR REPLACE INTO stores (domain, swept_ts, ads_found, new_videos) VALUES (?, ?, ?, ?)",
+                     (domain, int(time.time()), ads_found, new_videos))
+
+
+def store_sweeps():
+    with connect() as conn:
+        return {r["domain"]: dict(r) for r in conn.execute("SELECT * FROM stores")}
+
+
+
+# ---- góp kho: xuất / nhập dữ liệu để gộp kho với đồng đội ----
+
+_AD_COLS = ("ad_id", "collation_id", "collation_count", "page_id", "page_name", "start_ts", "end_ts", "is_active",
+            "title", "body", "link_url", "domain", "thumb_url", "video_url", "dhash", "keyword", "first_seen", "last_seen")
+_LANDING_COLS = ("url", "final_url", "domain", "platform", "created_ts", "published_ts", "title", "price", "checked_ts",
+                 "error", "date_source", "pod_markers", "compare_price")
+
+
+def export_data():
+    with connect() as conn:
+        ads = [{k: r[k] for k in _AD_COLS} for r in conn.execute("SELECT * FROM ads")]
+        lands = [{k: r[k] for k in _LANDING_COLS} for r in conn.execute("SELECT * FROM landings")]
+    return {"format": "snakemedia-pod", "version": 1, "exported_ts": int(time.time()), "ads": ads, "landings": lands}
+
+
+def import_data(data):
+    """Gộp dữ liệu người khác xuất ra: QC mới thì thêm, QC đã có thì lấy mốc sớm nhất / trạng thái mới nhất,
+    trang bán lấy bản đọc gần nhất. Trả về (số QC mới, số trang bán cập nhật)."""
+    if not isinstance(data, dict) or data.get("format") != "snakemedia-pod":
+        raise ValueError("File không phải dữ liệu SNAKEMEDIA POD")
+    new_ads = new_lands = 0
+    with _lock, connect() as conn:
+        for a in data.get("ads") or []:
+            if not isinstance(a, dict) or not a.get("ad_id"):
+                continue
+            row = {k: a.get(k) for k in _AD_COLS}
+            old = conn.execute("SELECT * FROM ads WHERE ad_id=?", (row["ad_id"],)).fetchone()
+            if not old:
+                conn.execute(f"INSERT INTO ads ({','.join(_AD_COLS)}) VALUES ({','.join('?' * len(_AD_COLS))})",
+                             [row[k] for k in _AD_COLS])
+                new_ads += 1
+                continue
+            starts = [x for x in (old["start_ts"], row["start_ts"]) if x]
+            newer = (row["last_seen"] or 0) > (old["last_seen"] or 0)
+            conn.execute(
+                """UPDATE ads SET start_ts=?, dhash=COALESCE(dhash, ?), thumb_url=COALESCE(thumb_url, ?),
+                       video_url=COALESCE(video_url, ?), is_active=?, end_ts=?, last_seen=? WHERE ad_id=?""",
+                (min(starts) if starts else None, row["dhash"], row["thumb_url"], row["video_url"],
+                 row["is_active"] if newer else old["is_active"], row["end_ts"] if newer else old["end_ts"],
+                 max(old["last_seen"] or 0, row["last_seen"] or 0), row["ad_id"]))
+        for l in data.get("landings") or []:
+            if not isinstance(l, dict) or not l.get("url"):
+                continue
+            old = conn.execute("SELECT checked_ts FROM landings WHERE url=?", (l["url"],)).fetchone()
+            if old and (old[0] or 0) >= (l.get("checked_ts") or 0):
+                continue
+            conn.execute(f"INSERT OR REPLACE INTO landings ({','.join(_LANDING_COLS)}) VALUES "
+                         f"({','.join('?' * len(_LANDING_COLS))})", [l.get(k) for k in _LANDING_COLS])
+            new_lands += 1
+    return new_ads, new_lands

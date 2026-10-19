@@ -19,6 +19,35 @@ không cần cài Python, không cần app chạy nền.
 Luật chấm và cách gom video giống hệt app: bài kiểm thử `tests/test_parity.py` chạy cả 2 bản trên cùng dữ liệu
 và so từng con số.
 
+## Tab theo kênh bán + công cụ đào hàng (bản nâng cấp 2)
+
+- **Nên xem tab nào** (tuỳ kênh bạn giỏi):
+  - **Chạy Facebook**: *Video Win* + *Video scale*.
+  - **Chạy TikTok**: thêm **Video Tiềm Năng**. Đây là video ≤ 10 ngày, đã có ≥ 2 QC mới trong 48 giờ hoặc ≥ 2 page chạy, nhưng chưa đủ điều kiện Sắp WIN.
+  - **Google Shopping / Search, SEO, sàn, free traffic**: **SP bò sữa**. Đây là video ≥ 30 ngày, có QC sống ≥ 21 ngày, ≥ 5 QC sống trên 14 ngày, ≥ 3 shop đang chạy.
+  - SP bò sữa xem dạng **bảng**: Ads cũ / Win / Scale / Tuổi video / Tuổi URL / Shop / Fanpage, kèm "+N hôm nay". Mọi danh sách khác cũng chuyển được sang dạng bảng.
+- **Lịch sử theo dõi**: mỗi lần chấm lại, tool chụp số fanpage chạy / shop sống / win / scale / số URL của từng video, mỗi ngày 1 dòng. Bảng chi tiết video hiện 14 ngày gần nhất kèm tăng/giảm so với hôm trước.
+- **Đang bán ở N trang**: mọi link bán của video, kèm nền tảng, giá, **giá gạch** (compare-at của Shopify) và ngày tạo trang.
+- **Quét store win**: soi mọi shop đang chạy video ở các tab Sắp WIN / Win / Scale / Tiềm năng / Bò sữa / Video test / Theo dõi để tìm sản phẩm khác của họ.
+  - Danh sách *Chờ soi / Đã soi* (trong 7 ngày), số video mới tìm được sau mỗi lượt soi.
+  - Mỗi đêm tự soi thêm N shop (mặc định 20, sửa ở *Tự quét mỗi đêm*).
+- **Đào sâu**: danh sách video Sắp WIN / Tiềm năng chưa đào, bấm 1 nút để đào N video đầu danh sách.
+  - Đào = soi toàn bộ QC (cả QC đã tắt) của các page đang chạy video, để tìm mốc chạy sớm nhất.
+  - Bảng chi tiết ghi rõ "chưa đào" / "đã đào X ngày trước".
+- **Quét hàng loạt**: dán nhiều từ khoá (mỗi dòng 1 từ), tool xếp hàng quét lần lượt, có nghỉ an toàn giữa các lượt.
+- **Tự đào từ khoá**: gợi ý từ khoá lấy từ tên sản phẩm / nội dung các video đang hot mà bạn chưa quét.
+- **Video test** và **Đã ẩn**: đánh dấu video định test; ẩn video không quan tâm khỏi mọi danh sách.
+- **Tìm nguồn hàng**: nút tìm theo ảnh (Google Lens) và theo tên sản phẩm (AliExpress, Amazon, Temu, CJ) để hỏi giá xưởng / bên fulfill của bạn. Sửa danh sách trong `SOURCING` của file cấu hình. Tool không nhận hoa hồng từ bên nào.
+- **Góp kho dữ liệu**: xuất toàn bộ QC + tuổi trang bán ra 1 file `.json`, đồng đội nhập vào để gộp kho.
+  - Mỗi người quét 1 ngách, gộp lại thì đếm được nhiều page/shop chạy cùng 1 video hơn hẳn quét lẻ.
+  - File dùng chung được giữa app và tiện ích Chrome.
+  - QC trùng không bị nhân đôi.
+
+Chưa làm được (nói thẳng):
+- **Ngày file video được upload lên Facebook**: dữ liệu Thư viện QC không có thông tin này. Tuổi video vẫn là "QC sớm nhất, tính cả QC đã tắt, trên mọi shop".
+- **Gợi ý từ Pinterest / Google Trends**: chưa làm.
+- **Kho chung trên máy chủ**: bản này gộp kho bằng file.
+
 ## Cài đặt (5 bước)
 
 1. Tải file **SnakemediaPOD-Chrome.zip** (mục *Artifacts* của lần build mới nhất trên GitHub Actions,
@@ -79,7 +108,8 @@ lib/                 logic (chuyển từ bản Python): config, db (IndexedDB),
                      social, safety, notify, diag, scanner (điều khiển cửa sổ quét), jobs, api, demo
 content/hook.js      chạy trong trang Facebook/TikTok, sao chép phản hồi API dữ liệu (không sửa, không chặn)
 content/agent.js     chuyển dữ liệu đó về phần nền
-dashboard.*          bảng điều khiển (giao diện giống app)
+dashboard.*          bảng điều khiển — dashboard.js / style.css là bản sao giao diện của app
+                     (sửa ở snakemedia-pod/snakepod/static rồi chạy: python snakemedia-chrome/sync_ui.py)
 popup.*              cửa sổ nhỏ khi bấm biểu tượng tiện ích
 tests/               kiểm thử bằng Chromium thật trên trang Facebook/TikTok GIẢ
 ```

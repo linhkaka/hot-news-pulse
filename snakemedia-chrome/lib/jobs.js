@@ -150,6 +150,8 @@ export async function checkLandings() {
 export async function recompute() {
   const videos = analyze.buildVideos(await db.allAds(), await db.landingsByUrl());
   await db.replaceVideos(videos);
+  await db.rekey(videos);
+  await db.recordHistory(videos, ymd(new Date()));
   log(`Đã chấm lại ${videos.length} video`);
   await notify.checkVideos(videos, log);
 }
@@ -243,7 +245,26 @@ const JOBS = {
     await safety.beforeScan("facebook", log, shouldStop);
     const ads = await scanner.scanPages(pages, country, C.DIG_MAX_ADS_PER_PAGE, log, shouldStop);
     await db.upsertAds(ads);
+    await db.markDug(cid);
     await processAfterScan();
+    return ads.length;
+  },
+
+  // Quét store win: soi 1 shop đang chạy video hot để tìm sản phẩm khác của họ.
+  async store({domain, country}) {
+    await demo.clearIfDemo(log);
+    await safety.beforeScan("facebook", log, shouldStop);
+    const known = new Set((await db.allAds()).map(a => a.ad_id));   // QC đã có trước lượt soi
+    log(`Soi store ${domain}`);
+    let ads = await scanner.scanKeyword(domain, country, C.DEFAULT_MAX_ADS, log, shouldStop);
+    const mine = ads.filter(a => a.domain === domain);
+    if (mine.length) ads = mine;
+    await db.upsertAds(ads);
+    await processAfterScan();
+    const fresh = new Set(ads.map(a => a.ad_id).filter(id => !known.has(id)));
+    const newVideos = (await db.listVideos()).filter(v => v.ads.some(a => fresh.has(a.ad_id))).length;
+    await db.saveStoreSweep(domain, ads.length, newVideos);
+    log(`${domain}: ${ads.length} QC, ${newVideos} video mới`);
     return ads.length;
   },
 
@@ -315,12 +336,14 @@ export async function queueAllWatched(reason) {
   for (const w of await db.listSocialWatch())
     n += submit("social", `Viral ${w.platform} '${w.keyword}'`,
       {platform: w.platform, keyword: w.keyword, country: w.country || country, max_items: C.DEFAULT_MAX_ADS});
+  const nStores = +(await autoSettings()).stores;
+  n += queueSweeps((await storeRows()).filter(r => r.status === "pending").slice(0, nStores).map(r => r.domain), country);
   log(`${reason}: xếp ${n} việc quét`);
   return n;
 }
 
 export async function autoSettings() {
-  return {enabled: true, hour: C.AUTO_SCAN_HOUR, last_date: null, ...(await db.getSetting("auto", {}))};
+  return {enabled: true, hour: C.AUTO_SCAN_HOUR, stores: C.AUTO_SWEEP_STORES, last_date: null, ...(await db.getSetting("auto", {}))};
 }
 
 const ymd = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
@@ -340,4 +363,87 @@ export async function schedulerTick(when = null) {
     if (submit("passive", "Lưu QC/video vừa lướt", {})) await db.setSetting("passive_dirty", false);
   }
   return false;
+}
+
+
+// ---- đào sâu hàng loạt ----
+
+// Video Sắp WIN / Tiềm năng chưa đào (hoặc đào đã lâu), nhiều QC/ngày lên trước.
+export async function digCandidates() {
+  const [dug, mk, vids] = await Promise.all([db.digs(), db.marks(), db.listVideos()]);
+  const cut = db.now() - C.DIG_FRESH_DAYS * 86400;
+  return vids.filter(v => (v.label === "sap_win" || v.potential) && !(mk[v.cid] && mk[v.cid].has("hidden"))
+    && (dug[v.cid] || 0) < cut);
+}
+
+// ---- quét store win: soi mọi shop đang chạy video hot để tìm sản phẩm khác của họ ----
+
+const TAB_NAMES = {sap_win: "Sắp WIN", win: "Video Win", scale: "Video scale"};
+const TAB_ORDER = ["Theo dõi", "Sắp WIN", "Video Win", "Video scale", "Tiềm năng", "Bò sữa", "Video test"];
+
+// Shop đang chạy video ở các tab Sắp WIN / Win / Scale / Tiềm năng / Bò sữa / Video test / Theo dõi.
+export async function storeRows() {
+  const [mk, follows, vids, shops, sweeps] = await Promise.all([db.marks(), db.listFollows(), db.listVideos(),
+    db.shopRows(), db.storeSweeps()]);
+  const tabs = new Map();
+  for (const v of vids) {
+    const m = mk[v.cid] || new Set();
+    if (m.has("hidden")) continue;
+    const names = [...(v.label in TAB_NAMES ? [TAB_NAMES[v.label]] : []), ...(v.potential ? ["Tiềm năng"] : []),
+      ...(v.cash_cow ? ["Bò sữa"] : []), ...(m.has("test") ? ["Video test"] : [])];
+    if (!names.length) continue;
+    for (const d of v.shops) {
+      if (!tabs.has(d)) tabs.set(d, {tabs: new Set(), videos: 0});
+      const t = tabs.get(d);
+      names.forEach(n => t.tabs.add(n));
+      t.videos += 1;
+    }
+  }
+  for (const f of follows) if (f.kind === "shop") {
+    if (!tabs.has(f.key)) tabs.set(f.key, {tabs: new Set(), videos: 0});
+    tabs.get(f.key).tabs.add("Theo dõi");
+  }
+  const byShop = Object.fromEntries(shops.map(r => [r.domain, r]));
+  const cut = db.now() - C.STORE_FRESH_DAYS * 86400;
+  const out = [...tabs].map(([d, t]) => {
+    const r = byShop[d] || {}, sw = sweeps[d] || {};
+    return {domain: d, tabs: TAB_ORDER.filter(n => t.tabs.has(n)), hot_videos: t.videos, ads: r.ads || 0, active: r.active || 0,
+      pages: r.pages || 0, platform: r.platform ?? null, swept_ts: sw.swept_ts ?? null, ads_found: sw.ads_found ?? null,
+      new_videos: sw.new_videos ?? null, status: (sw.swept_ts || 0) >= cut ? "done" : "pending"};
+  });
+  const rank = r => (r.status !== "pending" ? 1 : 0);
+  return out.sort((a, b) => (rank(a) - rank(b)) || (b.ads - a.ads) || (a.domain < b.domain ? -1 : a.domain > b.domain ? 1 : 0));
+}
+
+export function queueSweeps(domains, country = C.DEFAULT_COUNTRY) {
+  return domains.reduce((n, d) => n + submit("store", `Soi store ${d}`, {domain: d, country}), 0);
+}
+
+// ---- tự đào từ khoá: lấy từ tên sản phẩm / nội dung của các video đang hot mà bạn chưa quét ----
+
+const STOP = new Set(["the", "a", "an", "and", "or", "for", "to", "of", "in", "on", "with", "your", "you", "my", "our", "is", "it",
+  "this", "that", "new", "best", "get", "now", "buy", "shop", "free", "off", "sale", "just", "every", "from",
+  "at", "by", "be", "are", "was", "will", "can", "all", "more", "most", "how", "why", "what", "who", "its"]);
+
+function phrase(words, n) {
+  words = words.filter(w => !STOP.has(w) && !/^\d+$/.test(w) && w.length > 1);
+  return words.length >= 2 ? words.slice(0, n).join(" ") : null;
+}
+
+export async function keywordSuggestions(limit = 30) {
+  const known = new Set((await db.listWatchKeywords()).map(w => w.keyword.toLowerCase()));
+  for (const a of await db.allAds()) known.add((a.keyword || "").toLowerCase());
+  const count = new Map(), source = new Map();
+  for (const v of await db.listVideos()) {
+    if (!(["sap_win", "win", "scale"].includes(v.label) || v.potential || v.cash_cow)) continue;
+    const cands = [];
+    if (v.product_key) cands.push([phrase(v.product_key.split("-"), 4), "tên sản phẩm"]);
+    cands.push([phrase((v.title || "").toLowerCase().match(/[a-z0-9]+/g) || [], 3), "nội dung QC"]);
+    for (const [kw, src] of cands) if (kw && !known.has(kw)) {
+      count.set(kw, (count.get(kw) || 0) + 1);
+      if (!source.has(kw)) source.set(kw, src);
+    }
+  }
+  return [...count.keys()].sort((a, b) => (count.get(b) - count.get(a)) || (a < b ? -1 : a > b ? 1 : 0)).slice(0, limit)
+    .map(k => ({keyword: k, videos: count.get(k), source: source.get(k)}));
 }

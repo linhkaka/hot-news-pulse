@@ -182,6 +182,18 @@ export function summarize(cid, ads, landings, t = null) {
   const pageOld = !!(landingFirstTs && firstTs && firstTs - landingFirstTs > C.PAGE_OLDER_THAN_VIDEO * DAY);
 
   const [label, checks] = makeLabel(videoAge, landingAge, pageOld, shopsActive, shopsWin, buckets);
+  const longestRun = Math.max(0, ...active.map(a => daysOf(a.start_ts, t) || 0));
+  const [potential, cashCow, flagChecks] = makeFlags(videoAge, pageOld, label, adsNew, pagesActive.size, longestRun,
+    buckets, shopsActive.size);
+
+  // Mọi trang đang bán sản phẩm (link trong QC), nhiều QC nhất lên trước
+  const sellPages = [...linkCounts].sort((x, y) => y[1] - x[1]).slice(0, 30).map(([u, n]) => {
+    const l = landings[u] || {};
+    const netloc = urlparse(u).netloc.toLowerCase();
+    return {url: u, ads: n, domain: netloc.startsWith("www.") ? netloc.slice(4) : netloc, platform: l.platform ?? null,
+      price: l.price ?? null, compare_price: l.compare_price ?? null, created_ts: l.created_ts ?? null,
+      date_source: l.date_source ?? null};
+  });
 
   let rep = ads[0], repKey = null;
   for (const a of ads) {
@@ -214,6 +226,7 @@ export function summarize(cid, ads, landings, t = null) {
     ad_library_url: `https://www.facebook.com/ads/library/?id=${rep.ad_id}`,
     main_link: mainLink,
     price: (mainLanding || {}).price ?? null,
+    compare_price: (mainLanding || {}).compare_price ?? null,
     platform,
     product_type: productType,
     niches,
@@ -241,6 +254,12 @@ export function summarize(cid, ads, landings, t = null) {
     shops_new_48h: shopsNew,
     pages_new_48h: new Set(fresh.filter(a => a.page_id).map(a => a.page_id)).size,
     spreading,
+    potential,
+    cash_cow: cashCow,
+    flag_checks: flagChecks,
+    longest_run_days: pyRound(longestRun, 1),
+    urls_total: linkCounts.size,
+    sell_pages: sellPages,
     buckets,
     page_ids: sortedStr(pagesAll),
     shops: sortedStr(shopsAll),
@@ -280,6 +299,22 @@ function makeLabel(videoAge, landingAge, pageOld, shopsActive, shopsWin, buckets
   else if (buckets.scale >= C.MIN_SCALE_ADS && videoOk) label = "scale";
   else label = "theo_doi";
   return [label, checks];
+}
+
+// Video Tiềm Năng (vừa nhú) và SP bò sữa (chạy đều nhiều tuần) — 2 tab riêng, không thay nhãn chính.
+function makeFlags(videoAge, pageOld, label, adsNew, nPages, longestRun, buckets, nShops) {
+  const young = videoAge !== null && videoAge <= C.POTENTIAL_MAX_DAYS;
+  const stirring = adsNew >= C.POTENTIAL_MIN_NEW_ADS || nPages >= C.POTENTIAL_MIN_PAGES;
+  const potential = young && stirring && !pageOld && !["sap_win", "win"].includes(label);
+  const cashCow = videoAge !== null && videoAge >= C.COW_MIN_DAYS && longestRun >= C.COW_MIN_RUN_DAYS
+    && buckets.old >= C.COW_MIN_OLD_ADS && nShops >= C.COW_MIN_SHOPS;
+  const checks = [
+    {ok: potential, text: `Tiềm năng: video ≤ ${C.POTENTIAL_MAX_DAYS} ngày, ≥ ${C.POTENTIAL_MIN_NEW_ADS} QC mới/48h ` +
+      `hoặc ≥ ${C.POTENTIAL_MIN_PAGES} page đang chạy, chưa vào Sắp WIN / Win`},
+    {ok: cashCow, text: `Bò sữa: video ≥ ${C.COW_MIN_DAYS} ngày, có QC sống ≥ ${C.COW_MIN_RUN_DAYS} ngày, ` +
+      `≥ ${C.COW_MIN_OLD_ADS} QC sống > ${C.WIN_MAX_DAYS} ngày, ≥ ${C.COW_MIN_SHOPS} shop đang chạy`},
+  ];
+  return [potential, cashCow, checks];
 }
 
 export function buildVideos(ads, landings, t = null) {
