@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from pathlib import Path
 
 DEFAULTS = {
@@ -75,6 +76,17 @@ def facebook_enabled(cfg):
     return bool(cfg["user_access_token"]) or any(p.get("access_token") for p in cfg["pages"])
 
 
+# A bot token looks like 123456789:AAH... (35 characters after the colon).
+BOT_TOKEN_RE = re.compile(r"(\d{5,}:[\w-]{30,})")
+PLACEHOLDER_TOKEN = "TOKEN-TU-BOTFATHER"
+
+
+def clean_bot_token(value):
+    """Pull the token out of whatever was pasted: spaces, quotes, a 'bot' prefix or a full URL."""
+    match = BOT_TOKEN_RE.search(value or "")
+    return match.group(1) if match else (value or "").strip()
+
+
 def _split_list(value):
     return [item.strip() for item in value.split(",") if item.strip()]
 
@@ -116,8 +128,15 @@ def load_config(path):
     for key in INT_KEYS:
         cfg[key] = int(cfg[key])
 
+    cfg["telegram_bot_token"] = clean_bot_token(cfg["telegram_bot_token"])
+    cfg["telegram_chat_id"] = str(cfg["telegram_chat_id"]).strip().strip('"').strip("'")
     missing = [k for k in ("telegram_bot_token", "telegram_chat_id") if not cfg[k]]
     if missing:
         raise ValueError(f"Thiếu cấu hình bắt buộc: {', '.join(missing)}")
+    if PLACEHOLDER_TOKEN in cfg["telegram_bot_token"]:
+        raise ValueError(
+            "TELEGRAM_BOT_TOKEN trong file .env vẫn là token mẫu. "
+            "Hãy thay bằng token thật lấy từ @BotFather."
+        )
     cfg["workers"] = max(1, cfg["workers"])
     return cfg

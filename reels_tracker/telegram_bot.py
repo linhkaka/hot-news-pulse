@@ -50,6 +50,12 @@ class Telegram:
             raise TelegramError(f"Telegram {method} failed: {data.get('description')}")
         return data["result"]
 
+    def get_me(self):
+        return self._call("getMe", {})
+
+    def get_chat(self):
+        return self._call("getChat", {"chat_id": self.chat_id})
+
     def send(self, text, chat_id=None):
         # Telegram rejects messages longer than 4096 characters.
         with self._send_lock:

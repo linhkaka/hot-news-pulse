@@ -15,6 +15,12 @@ if not exist .env (
 )
 :loop
 .venv\Scripts\python tracker.py
+if errorlevel 2 (
+    echo.
+    echo Cau hinh chua dung - xem huong dan sua loi o tren, sua file .env roi chay lai.
+    pause
+    exit /b 2
+)
 echo Tool da dung, tu khoi dong lai sau 10 giay... (Ctrl+C de thoat)
 timeout /t 10 >nul
 goto loop

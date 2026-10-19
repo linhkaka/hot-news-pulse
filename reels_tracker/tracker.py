@@ -472,6 +472,48 @@ class Tracker:
         return min(waits) if waits else 60
 
 
+TOKEN_HELP = """Token bot Telegram không đúng (Telegram báo: {error}).
+Cách sửa:
+  1. Mở Telegram → chat với @BotFather → gõ /mybots → chọn bot của bạn → API Token.
+  2. Copy token (dạng 123456789:AAH...).
+  3. Mở file .env, sửa dòng:  TELEGRAM_BOT_TOKEN=<dán token vào đây>
+     (không thêm dấu cách, dấu ngoặc kép hay chữ 'bot' phía trước)
+  4. Lưu file (Ctrl+S) rồi chạy lại tool."""
+
+CHAT_HELP = """Bot @{bot} không gửi được tin tới chat {chat_id} (Telegram báo: {error}).
+Cách sửa:
+  1. Mở Telegram, tìm bot @{bot}, bấm Start (hoặc gửi 1 tin bất kỳ).
+  2. Mở trình duyệt: https://api.telegram.org/bot<TOKEN>/getUpdates
+     tìm "chat":{{"id":... → số đó là chat ID.
+  3. Mở file .env, sửa dòng:  TELEGRAM_CHAT_ID=<số vừa tìm>
+  4. Lưu file rồi chạy lại tool."""
+
+
+def verify_telegram(telegram):
+    """Check the bot token and chat ID; return a help text when they are wrong."""
+    try:
+        bot = telegram.get_me().get("username", "?")
+    except TelegramError as e:
+        if "Unauthorized" in str(e) or "Not Found" in str(e):
+            return TOKEN_HELP.format(error=str(e).split(": ", 1)[-1])
+        log.warning("Telegram check failed: %s", e)
+        return None
+    except requests.RequestException as e:
+        log.warning("Telegram unreachable, will keep retrying: %s", e)
+        return None
+    try:
+        telegram.get_chat()
+    except TelegramError as e:
+        if "chat not found" in str(e) or "Bad Request" in str(e) or "Forbidden" in str(e):
+            return CHAT_HELP.format(bot=bot, chat_id=telegram.chat_id,
+                                    error=str(e).split(": ", 1)[-1])
+        log.warning("Telegram chat check failed: %s", e)
+    except requests.RequestException as e:
+        log.warning("Telegram unreachable, will keep retrying: %s", e)
+    log.info("Telegram OK: bot @%s → chat %s", bot, telegram.chat_id)
+    return None
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config", default="config.json")
@@ -495,6 +537,10 @@ def main(argv=None):
     global DISPLAY_TZ
     DISPLAY_TZ = timezone(timedelta(hours=cfg["utc_offset_hours"]))
     telegram = Telegram(cfg["telegram_bot_token"], cfg["telegram_chat_id"])
+    problem = verify_telegram(telegram)
+    if problem:
+        log.error("\n%s", problem)
+        return 2
     if args.test_telegram:
         try:
             telegram.send("✅ Tracker: kết nối Telegram thành công!")
