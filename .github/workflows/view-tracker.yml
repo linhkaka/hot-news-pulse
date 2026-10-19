@@ -19,7 +19,7 @@ permissions:
 
 jobs:
   scan:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     defaults:
       run:
@@ -34,9 +34,9 @@ jobs:
       VIEW_THRESHOLD: ${{ vars.VIEW_THRESHOLD }}
       DB_PATH: data/reels_tracker.db
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -47,7 +47,7 @@ jobs:
       # The database (tracked channels, settings, view history) is carried from
       # one run to the next in the Actions cache; the newest copy is restored.
       - name: Restore saved data
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: reels_tracker/data
           key: tracker-data-${{ github.run_id }}
@@ -58,7 +58,7 @@ jobs:
 
       - name: Save data
         if: always()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: reels_tracker/data
           key: tracker-data-${{ github.run_id }}-${{ github.run_attempt }}
