@@ -211,6 +211,40 @@ class CommandBot:
             return "🔄 Đang quét, có kết quả sẽ báo ngay."
         return "Không hiểu lệnh này. Gõ /help để xem danh sách lệnh."
 
+    def process_updates(self, updates):
+        """Answer the commands in `updates`; returns how many were from our chat."""
+        handled = 0
+        for update in updates:
+            message = update.get("message") or {}
+            chat_id = str(message.get("chat", {}).get("id", ""))
+            text = message.get("text") or ""
+            if chat_id != self.telegram.chat_id:
+                if text:
+                    log.info("Ignoring message from unauthorized chat %s", chat_id)
+                continue
+            handled += 1
+            try:
+                reply = self.handle(text)
+            except Exception:  # keep the bot alive whatever a command does
+                log.exception("Command %r failed", text)
+                reply = "⚠️ Có lỗi khi xử lý lệnh, xem log để biết chi tiết."
+            if reply:
+                try:
+                    self.telegram.send(reply)
+                except (TelegramError, requests.RequestException) as e:
+                    log.warning("Reply failed: %s", e)
+        return handled
+
+    def process_pending(self):
+        """One-shot: answer commands sent since the last run (offset kept in the database)."""
+        store = self.tracker.store
+        offset = store.get_setting("telegram_offset")
+        updates = self.telegram.get_updates(int(offset) if offset else None, timeout=0)
+        if updates:
+            # Save first, so a crash in a command never makes it run again next time.
+            store.set_setting("telegram_offset", updates[-1]["update_id"] + 1)
+        return self.process_updates(updates)
+
     def run(self, stop_event):
         offset = None
         while not stop_event.is_set():
@@ -220,22 +254,7 @@ class CommandBot:
                 log.warning("getUpdates failed: %s", e)
                 time.sleep(5)
                 continue
-            for update in updates:
-                offset = update["update_id"] + 1
-                message = update.get("message") or {}
-                chat_id = str(message.get("chat", {}).get("id", ""))
-                text = message.get("text") or ""
-                if chat_id != self.telegram.chat_id:
-                    if text:
-                        log.info("Ignoring message from unauthorized chat %s", chat_id)
-                    continue
-                try:
-                    reply = self.handle(text)
-                except Exception:  # keep the bot alive whatever a command does
-                    log.exception("Command %r failed", text)
-                    reply = "⚠️ Có lỗi khi xử lý lệnh, xem log để biết chi tiết."
-                if reply:
-                    try:
-                        self.telegram.send(reply)
-                    except (TelegramError, requests.RequestException) as e:
-                        log.warning("Reply failed: %s", e)
+            if updates:
+                offset = updates[-1]["update_id"] + 1
+                self.tracker.store.set_setting("telegram_offset", offset)
+            self.process_updates(updates)

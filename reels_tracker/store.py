@@ -2,7 +2,9 @@
 
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
+from pathlib import Path
 
 
 def _now():
@@ -11,6 +13,7 @@ def _now():
 
 class Store:
     def __init__(self, path):
+        Path(path).parent.mkdir(parents=True, exist_ok=True)
         # Shared by the scan loop and the Telegram command thread.
         self.conn = sqlite3.connect(str(path), check_same_thread=False)
         self.lock = threading.Lock()
@@ -148,6 +151,20 @@ class Store:
             "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
             (key, str(value)),
         )
+
+    def alert_due(self, key, every_seconds):
+        """True (and remember now) if alert `key` was not sent in the last `every_seconds`.
+
+        Stored in the database so one-shot runs (--cron) don't repeat alerts every run.
+        """
+        last = float(self.get_setting(f"alert:{key}", 0))
+        if time.time() - last < every_seconds:
+            return False
+        self.set_setting(f"alert:{key}", time.time())
+        return True
+
+    def clear_alert(self, key):
+        self._execute("DELETE FROM settings WHERE key = ?", (f"alert:{key}",))
 
     # --- reels --------------------------------------------------------------
 

@@ -26,7 +26,7 @@ from config import facebook_enabled, load_config
 from graph import GraphAPIError, GraphClient, RateLimitError, TokenError, parse_fb_time
 from report import ScanReport, format_report, snapshots_csv
 from store import Store
-from telegram_bot import CommandBot, Telegram, TelegramError
+from telegram_bot import COMMANDS, CommandBot, Telegram, TelegramError
 from youtube import YouTubeClient, YouTubeScanner, format_interval
 
 log = logging.getLogger("reels_tracker")
@@ -34,6 +34,9 @@ log = logging.getLogger("reels_tracker")
 PAGE_TOKEN_REFRESH_SECONDS = 30 * 60
 RATE_LIMIT_COOLDOWN_SECONDS = 15 * 60
 TOKEN_CHECK_INTERVAL_SECONDS = 24 * 60 * 60
+ALERT_REPEAT_SECONDS = 6 * 60 * 60
+# Scheduled (--cron) runs can start a few minutes early or late.
+CRON_TOLERANCE_SECONDS = 5 * 60
 FB_DISABLED = "Facebook chưa bật. Thêm FB_USER_ACCESS_TOKEN vào file .env rồi chạy lại tool."
 
 
@@ -101,8 +104,6 @@ class Tracker:
         self.token_expires_at = None
         self._managed = {}
         self._managed_at = None
-        self._token_alert_sent = False
-        self._last_token_check = None
         self._warned_missing = set()
         # reel_id -> clock() of the last view check, for the slow lane of older Reels.
         self._last_checked = {}
@@ -262,10 +263,9 @@ class Tracker:
         return lines
 
     def _send_token_alert(self, text):
-        if self._token_alert_sent:
-            return
-        self._token_alert_sent = True
         log.error(text)
+        if not self.store.alert_due("facebook_token", ALERT_REPEAT_SECONDS):
+            return
         try:
             self.telegram.send(text)
         except (TelegramError, requests.RequestException) as e:
@@ -274,12 +274,10 @@ class Tracker:
     def check_token_expiry(self):
         token = self.cfg["user_access_token"]
         now = self.clock()
-        if not token or (
-            self._last_token_check is not None
-            and now - self._last_token_check < TOKEN_CHECK_INTERVAL_SECONDS
-        ):
+        last_check = float(self.store.get_setting("last_token_check", 0))
+        if not token or now - last_check < TOKEN_CHECK_INTERVAL_SECONDS:
             return
-        self._last_token_check = now
+        self.store.set_setting("last_token_check", now)
         try:
             expires_at = self.graph.token_expires_at(token)
         except TokenError as e:
@@ -406,7 +404,7 @@ class Tracker:
         for page_id, _, _ in pages:
             self.store.mark_source_scanned("facebook", page_id)
         self.last_report = report
-        self._token_alert_sent = False
+        self.store.clear_alert("facebook_token")
         self.last_scan_at = self.clock()
         self.last_scan_result = f"{len(pages)} Page, {checked} Reel, gửi {sent} thông báo"
         log.info("Facebook scan done: %s", self.last_scan_result)
@@ -438,6 +436,62 @@ class Tracker:
             self.wakeup.wait(max(1, self._seconds_until_next_scan()))
             self.wakeup.clear()
 
+    def _cron_due(self, platform, interval):
+        last = float(self.store.get_setting(f"last_scan:{platform}", 0))
+        return self.clock() - last >= interval - CRON_TOLERANCE_SECONDS
+
+    def _load_scan_state(self):
+        """Restore 'last scan' info saved by earlier --cron runs (for /status)."""
+        for platform, target in (("facebook", self), ("youtube", self.youtube)):
+            if target is None:
+                continue
+            last = self.store.get_setting(f"last_scan:{platform}")
+            if last:
+                target.last_scan_at = float(last)
+                target.last_scan_result = self.store.get_setting(
+                    f"last_scan_result:{platform}", "đã quét")
+
+    def _save_scan_state(self, platform, target):
+        self.store.set_setting(f"last_scan:{platform}", self.clock())
+        self.store.set_setting(f"last_scan_result:{platform}", target.last_scan_result)
+
+    def run_cron(self, bot):
+        """One scheduled run (e.g. GitHub Actions): answer the Telegram commands sent
+        since the last run, scan what is due (or what /scan asked for), report, exit."""
+        self._load_scan_state()
+        try:
+            handled = bot.process_pending()
+            log.info("Handled %d Telegram command(s)", handled)
+        except (TelegramError, requests.RequestException, ValueError) as e:
+            log.warning("Could not read Telegram commands: %s", e)
+        forced = self.scan_requested.is_set()
+        reports = []
+        if self.facebook_enabled and (forced or self._cron_due("facebook", self.scan_interval())):
+            self.check_token_expiry()
+            self.last_report = None
+            self.scan_once()
+            self._save_scan_state("facebook", self)
+            reports.append(self.last_report)
+        if self.youtube and (forced or self._cron_due("youtube", self.youtube.interval_fn())):
+            self.youtube.last_report = None
+            self.youtube.scan_once()
+            self._save_scan_state("youtube", self.youtube)
+            reports.append(self.youtube.last_report)
+        if not reports:
+            log.info("Nothing due yet (scan interval: %s)", format_interval(self.scan_interval()))
+        if not self.store.active_pages() and not self.store.active_channels():
+            if self.store.alert_due("empty_setup", 24 * 60 * 60):
+                hint = ["👋 Tool đang chạy nhưng chưa có kênh/Page nào để theo dõi."]
+                hint.append("▶️ Thêm kênh YouTube: /addyt UCxxxx (ID kênh)")
+                if self.facebook_enabled:
+                    hint.append("📘 Thêm tất cả Fanpage bạn quản lý: /addall")
+                hint.append("Lệnh sẽ được xử lý ở lần chạy kế tiếp (tối đa ~30 phút).")
+                try:
+                    self.telegram.send("\n".join(hint))
+                except (TelegramError, requests.RequestException) as e:
+                    log.warning("Could not send setup hint: %s", e)
+        self.publish_reports([r for r in reports if r is not None])
+
     def auto_report(self):
         return self.store.get_setting("auto_report", "1") == "1"
 
@@ -449,6 +503,8 @@ class Tracker:
             self.store.add_snapshots(report.snapshot_rows())
         keep_from = datetime.now(timezone.utc) - timedelta(days=self.cfg["history_days"])
         self.store.prune_snapshots(keep_from.isoformat())
+        if not any(report.sources for report in reports):
+            return  # nothing tracked yet: no empty report
         text = format_report(reports, self.cfg["report_top_videos"], format_time(self.clock()))
         self.store.set_setting("last_report", text)
         if not self.auto_report():
@@ -520,6 +576,10 @@ def main(argv=None):
     parser.add_argument("--once", action="store_true", help="Run one scan and exit")
     parser.add_argument("--test-telegram", action="store_true", help="Send a test message")
     parser.add_argument("--no-bot", action="store_true", help="Don't answer Telegram commands")
+    parser.add_argument(
+        "--cron", action="store_true",
+        help="One scheduled run: handle pending Telegram commands, scan if due, exit",
+    )
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
 
@@ -561,6 +621,16 @@ def main(argv=None):
     )
     tracker.youtube.seed_channels(cfg["youtube_channels"])
     stop = threading.Event()
+
+    if args.cron:
+        if store.get_setting("bot_commands") != str(len(COMMANDS)):
+            try:
+                telegram.set_commands()
+                store.set_setting("bot_commands", len(COMMANDS))
+            except (TelegramError, requests.RequestException) as e:
+                log.warning("Could not register bot commands: %s", e)
+        tracker.run_cron(CommandBot(telegram, tracker))
+        return 0
 
     if args.once:
         tracker.run(stop, once=True)

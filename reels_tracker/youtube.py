@@ -256,7 +256,6 @@ class YouTubeScanner:
         self.last_scan_at = None
         self.last_scan_result = "chưa quét"
         self.last_report = None  # ScanReport of the latest successful scan
-        self._key_alert_sent = False
 
     @property
     def mode(self):
@@ -394,7 +393,7 @@ class YouTubeScanner:
         for channel_id, _, _ in channels:
             self.store.mark_source_scanned("youtube", channel_id)
         self.last_report = report
-        self._key_alert_sent = False
+        self.store.clear_alert("youtube_key")
         self.last_scan_at = self.clock()
         self.last_scan_result = f"{len(channels)} kênh, {len(pending)} video, gửi {sent} thông báo"
         log.info("YouTube scan done: %s", self.last_scan_result)
@@ -411,11 +410,10 @@ class YouTubeScanner:
             return []
 
     def _send_key_alert(self, error):
-        if self._key_alert_sent:
-            return
-        self._key_alert_sent = True
         text = f"⚠️ YouTube API key không dùng được ({error}). Kiểm tra lại YOUTUBE_API_KEY."
         log.error(text)
+        if not self.store.alert_due("youtube_key", 6 * 60 * 60):
+            return
         try:
             self.telegram.send(text)
         except Exception as e:  # alerting must never crash the scan loop

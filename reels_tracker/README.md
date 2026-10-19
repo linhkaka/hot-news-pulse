@@ -133,7 +133,50 @@ quota đã dùng hôm nay.
 
 ## Bước 3 — Chạy tool
 
-Chọn **một** trong các cách sau.
+Chọn **một** trong các cách sau. Không muốn bật máy tính 24/7 → dùng **Cách D (GitHub Actions)**.
+
+### ⭐ Cách D — Chạy miễn phí trên GitHub Actions (không cần bật máy tính)
+
+GitHub tự chạy tool **mỗi 30 phút** trên máy chủ của họ. Tắt máy tính vẫn nhận báo cáo.
+Mọi bước làm trên **trình duyệt**.
+
+**1. Đưa code lên nhánh chính (`main`).** Lịch tự chạy chỉ hoạt động trên nhánh chính:
+mở Pull Request của tool trên GitHub → bấm **Merge pull request** → **Confirm merge**.
+
+**2. Dán token vào GitHub (an toàn, không ai xem được):**
+vào repo trên GitHub → **Settings** → **Secrets and variables** → **Actions** →
+tab **Secrets** → **New repository secret**, tạo lần lượt:
+
+| Name | Secret (giá trị) | Bắt buộc? |
+|---|---|---|
+| `TELEGRAM_BOT_TOKEN` | Token bot từ @BotFather | ✅ |
+| `TELEGRAM_CHAT_ID` | Chat ID của bạn | ✅ |
+| `YOUTUBE_API_KEY` | API key YouTube (Bước 2a) | Không |
+| `FB_USER_ACCESS_TOKEN` | Token Facebook (Bước 2b) | Không |
+
+(Không bắt buộc) tab **Variables** → **New repository variable**: `YT_CHANNELS` (ID kênh, cách
+nhau dấu phẩy), `FB_PAGE_IDS`, `VIEW_THRESHOLD`. Có thể bỏ qua và thêm kênh bằng lệnh Telegram.
+
+**3. Bật và chạy thử:** tab **Actions** → nếu GitHub hỏi thì bấm
+**I understand my workflows, go ahead and enable them** → chọn **View tracker** bên trái →
+**Run workflow** → **Run workflow**. Khoảng 1 phút sau, dấu ✅ xanh và Telegram nhận tin.
+
+**4. Thêm kênh:** nhắn bot `/addyt UCxxxx` (YouTube) hoặc `/addall` (Facebook).
+
+Từ đó GitHub tự chạy mỗi 30 phút. Lưu ý:
+
+- ⏳ Lệnh Telegram được trả lời ở **lần chạy kế tiếp** (chậm tối đa ~30 phút, bấm
+  **Run workflow** để chạy ngay). Lệnh thêm kênh/Page và `/scan` sẽ quét luôn ở lần chạy đó.
+- ⏱ GitHub đôi khi chạy trễ vài phút đến vài chục phút so với lịch — bình thường.
+- `/interval 60` hoạt động (bỏ qua các lần chạy chưa đủ 60 phút). Không chạy dày hơn 30 phút.
+- 💰 Repo **public**: miễn phí không giới hạn. Repo **private**: 2.000 phút miễn phí/tháng,
+  tool dùng khoảng 1.500 phút/tháng (mỗi lần ~1 phút).
+- ❌ Nếu lần chạy có dấu ✗ đỏ (ví dụ token sai), GitHub gửi email cho bạn; bấm vào lần chạy
+  → **scan** → xem bước **Handle Telegram commands, scan and report** để đọc lỗi.
+- 💤 Repo public không có hoạt động gì trong 60 ngày thì GitHub tạm tắt lịch chạy và gửi email
+  báo — chỉ cần vào tab Actions bấm **Enable workflow**.
+- Dữ liệu (kênh đã thêm, lịch sử view) được GitHub lưu giữa các lần chạy. Không chạy song song
+  bản trên máy tính với cùng bot Telegram (hai nơi sẽ tranh nhau đọc lệnh).
 
 ### Cách A — Windows (dễ nhất)
 
@@ -217,6 +260,7 @@ hơn giá trị trong `.env`).
 | `python tracker.py --test-telegram` | Gửi tin thử để kiểm tra Telegram |
 | `python tracker.py --once` | Quét 1 lần rồi thoát (dùng với cron) |
 | `python tracker.py --no-bot` | Chỉ quét, không nhận lệnh Telegram |
+| `python tracker.py --cron` | 1 lần chạy theo lịch: trả lời lệnh Telegram đang chờ, quét nếu đến giờ, rồi thoát (dùng cho GitHub Actions / cron) |
 | `python tracker.py -v` | In log chi tiết để tìm lỗi |
 
 ## Xử lý sự cố
