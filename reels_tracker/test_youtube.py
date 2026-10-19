@@ -324,3 +324,13 @@ def test_config_youtube_only(tmp_path, monkeypatch):
     cfg = config.load_config(tmp_path / "none.json")
     assert cfg["youtube_channels"] == ["@a", "UCabcdefghijklmnopqrstuv"]
     assert not config.facebook_enabled(cfg)
+
+
+def test_youtube_uses_shared_interval(tmp_path):
+    t = make(tmp_path)
+    t.youtube.interval_fn = lambda: t.scan_interval("youtube_poll_interval_seconds")
+    t.youtube.add_channel(CH)
+    t.set_scan_interval(3600)
+    t.youtube.scan_once()
+    assert 3590 < t.youtube.seconds_until_due() <= 3600
+    assert "Quét mỗi: 1 giờ" in CommandBot(t.telegram, t).handle("/status")

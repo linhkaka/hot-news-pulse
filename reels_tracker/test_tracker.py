@@ -247,3 +247,30 @@ def test_old_reels_use_slow_lane(tmp_path):
     t.scan_once()
     assert g.calls.count("new") == 2
     assert g.calls.count("old") == 1  # re-checked only after slow_check_interval_seconds
+
+
+def test_default_interval_is_30_minutes_and_can_change(tmp_path):
+    t = make_tracker(tmp_path)
+    bot = CommandBot(t.telegram, t)
+    assert t.scan_interval() == 1800
+    assert "Quét mỗi: 30 phút" in bot.handle("/status")
+    assert "30 phút" in bot.handle("/interval")
+
+    t.last_scan_at = 1000.0
+    assert "mỗi 60 phút" in bot.handle("/interval 60")
+    assert t.scan_interval() == 3600
+    assert t.scan_interval("youtube_poll_interval_seconds") == 3600
+    assert t.fb_next_due == 1000.0 + 3600
+    assert t.wakeup.is_set() and not t.scan_requested.is_set()
+    assert "Quét mỗi: 1 giờ" in bot.handle("/status")
+
+    assert "Đổi:" in bot.handle("/interval 0")
+    assert "Đổi:" in bot.handle("/interval abc")
+    assert t.scan_interval() == 3600
+
+
+def test_interval_survives_restart(tmp_path):
+    t = make_tracker(tmp_path)
+    t.set_scan_interval(3600)
+    t2 = tracker.Tracker(t.cfg, t.graph, t.telegram, Store(tmp_path / "t.db"))
+    assert t2.scan_interval() == 3600

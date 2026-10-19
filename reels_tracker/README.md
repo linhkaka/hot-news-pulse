@@ -1,7 +1,7 @@
 # Reels & YouTube Tracker → Telegram
 
-Tool chạy 24/7, quét **gần realtime (mỗi 1 phút)** hệ thống **Facebook Fanpage** và
-**kênh YouTube**. Video/Reel nào **vượt 5.000 view** (ngưỡng tùy chỉnh) thì bot gửi
+Tool chạy 24/7, tự động quét hệ thống **Facebook Fanpage** và **kênh YouTube**
+**mỗi 30 phút** (đổi được thành 60 phút hoặc bất kỳ, bằng lệnh `/interval`). Video/Reel nào **vượt 5.000 view** (ngưỡng tùy chỉnh) thì bot gửi
 **link chính xác** về Telegram — mỗi video chỉ báo **1 lần**.
 Bạn điều khiển tool ngay trong Telegram: thêm/bỏ kênh, đổi ngưỡng, xem top video…
 
@@ -12,17 +12,17 @@ không scrape, không cookie, không proxy → không làm tài khoản bị kh�
 |---|---|---|
 | Cần gì | Không cần gì (RSS) — API key là tùy chọn | Token Facebook |
 | Theo dõi được | Mọi kênh công khai | Chỉ Page bạn là admin / có quyền quản lý |
-| Tốc độ quét | Mỗi 60 giây | Mỗi 60 giây |
+| Tần suất quét | 30 phút/lần (mặc định) | 30 phút/lần (mặc định) |
 
-> ⏱ **"Realtime" thực tế:** tool quét mỗi phút, nhưng chính YouTube/Facebook cập nhật số view
-> có độ trễ (thường vài phút, RSS YouTube có thể chậm hơn). Tool báo **ngay khi nền tảng
-> công bố số mới**, không thể nhanh hơn nguồn dữ liệu.
+> ⏱ Đổi tần suất ngay trong Telegram: `/interval 30` (30 phút) hoặc `/interval 60` (1 giờ).
+> Áp dụng cho cả Facebook và YouTube, giữ nguyên sau khi khởi động lại.
+> Quét thưa như vậy gần như không tốn quota/API và không bao giờ bị giới hạn.
 
 ---
 
 ## Tính năng
 
-- ⚡ Quét mỗi 60 giây, **nhiều Page/kênh song song** (mặc định 5 luồng)
+- ⏱ Quét mỗi 30 phút (đổi bằng `/interval`), **nhiều Page/kênh song song** (mặc định 5 luồng)
 - 📥 YouTube: phát hiện video mới bằng RSS miễn phí; có API key thì lấy số view
   của **50 video chỉ tốn 1 đơn vị quota** → theo dõi được hàng trăm kênh
 - 🐢 Facebook: Reels mới (< 24 giờ) kiểm tra mỗi lần quét; Reels cũ hơn kiểm tra 10 phút/lần
@@ -49,6 +49,7 @@ không scrape, không cookie, không proxy → không làm tài khoản bị kh�
 | `/remove <page_id>` | Bỏ theo dõi Facebook Page |
 | `/pages` | Danh sách Facebook Page đang theo dõi |
 | `/threshold 5000` | Đổi ngưỡng view (dùng chung cho YouTube và Facebook) |
+| `/interval 30` | Đổi thời gian giữa 2 lần quét, tính bằng phút (`/interval 60` = 1 giờ) |
 | `/top` | Top 10 video/Reels nhiều view nhất |
 | `/scan` | Quét ngay, không đợi |
 | `/help` | Danh sách lệnh |
@@ -78,7 +79,7 @@ mở kênh YouTube → bấm vào phần mô tả kênh (*…thêm*) → **Chia 
 4. Copy key → đây là `YOUTUBE_API_KEY`. (Nên bấm *Restrict key* → chỉ cho *YouTube Data API v3*.)
 
 Quota miễn phí 10.000 đơn vị/ngày. Mỗi lần quét tốn khoảng **1 đơn vị cho mỗi 50 video**
-đang theo dõi → quét mỗi phút cả ngày chỉ khoảng 1.500–3.000 đơn vị. `/status` cho biết
+đang theo dõi → quét 30 phút/lần chỉ tốn khoảng 50–200 đơn vị/ngày. `/status` cho biết
 quota đã dùng hôm nay.
 
 ## Bước 2b — Facebook (nếu theo dõi Fanpage)
@@ -144,10 +145,10 @@ Cấu hình cơ bản nằm trong file **`.env`** (xem `.env.example`):
 | `TELEGRAM_CHAT_ID` | Chat/group nhận thông báo và được quyền ra lệnh | bắt buộc |
 | `YOUTUBE_API_KEY` | API key YouTube (Bước 2a) | trống = chỉ dùng RSS |
 | `YT_CHANNELS` | Kênh YouTube, cách nhau dấu phẩy (hoặc dùng `/addyt`) | trống |
-| `YOUTUBE_POLL_INTERVAL_SECONDS` | Bao lâu quét YouTube 1 lần | `60` |
+| `YOUTUBE_POLL_INTERVAL_SECONDS` | Bao lâu quét YouTube 1 lần (giây) | `1800` (30 phút) |
 | `FB_USER_ACCESS_TOKEN` | Token Facebook (Bước 2b) | trống = tắt Facebook |
 | `FB_PAGE_IDS` | Page ID cách nhau dấu phẩy (hoặc dùng `/addall`, `/add`) | trống |
-| `POLL_INTERVAL_SECONDS` | Bao lâu quét Facebook 1 lần | `60` |
+| `POLL_INTERVAL_SECONDS` | Bao lâu quét Facebook 1 lần (giây) | `1800` (30 phút) |
 | `VIEW_THRESHOLD` | Ngưỡng view | `5000` |
 | `WORKERS` | Số Page/kênh quét song song | `5` |
 
@@ -165,8 +166,9 @@ Tùy chọn nâng cao trong `config.json` (copy từ `config.example.json`, khô
 | `graph_api_version` | Phiên bản Facebook Graph API | `v23.0` |
 | `db_path` | File database | `reels_tracker.db` |
 
-Ngưỡng đổi bằng `/threshold`, kênh/Page thêm bỏ bằng lệnh Telegram được lưu trong
-database, giữ nguyên sau khi khởi động lại.
+Ngưỡng đổi bằng `/threshold`, thời gian quét đổi bằng `/interval`, kênh/Page thêm bỏ bằng
+lệnh Telegram được lưu trong database, giữ nguyên sau khi khởi động lại (và được ưu tiên
+hơn giá trị trong `.env`).
 
 > 🔒 **Không bao giờ commit `.env` hay `config.json`** lên GitHub — đã có sẵn trong `.gitignore`.
 
@@ -187,13 +189,14 @@ database, giữ nguyên sau khi khởi động lại.
 | Không nhận được tin nào | Chạy `--test-telegram`. Kiểm tra đã bấm Start với bot chưa, chat ID đúng chưa. |
 | `/addyt @handle` báo cần API key | Không có key thì dùng ID kênh `UC...` (cách lấy ở Bước 2a). |
 | `/addyt` báo "Không tìm thấy kênh" | Kiểm tra lại ID / @handle. |
+| Muốn kiểm tra ngay, không đợi 30 phút | Gõ `/scan`. |
 | Số view YouTube cập nhật chậm | RSS có thể trễ. Thêm `YOUTUBE_API_KEY` để có số mới hơn. |
 | Báo "YouTube API key không dùng được" | Kiểm tra key, và đã **Enable YouTube Data API v3** chưa (Bước 2a). |
-| Báo "hết quota YouTube" | Tool tự nghỉ 1 giờ. Tăng `YOUTUBE_POLL_INTERVAL_SECONDS`. Quota reset mỗi ngày. |
+| Báo "hết quota YouTube" | Tool tự nghỉ 1 giờ. Tăng thời gian quét bằng `/interval`. Quota reset mỗi ngày. |
 | `/add` báo "Không đọc được Page" | Tài khoản của token không phải admin Page đó, hoặc token thiếu quyền ở Bước 2b. |
 | Log báo `No view metric` (Facebook) | Chạy với `-v` để xem lỗi từng metric. Kiểm tra quyền `read_insights`. |
 | Báo "Token Facebook không hợp lệ" | Token hết hạn/đổi mật khẩu → làm lại Bước 2b, sửa `.env`, chạy lại tool. |
-| Báo "giới hạn tốc độ" (Facebook) | Tool tự nghỉ 15 phút. Nếu bị thường xuyên: tăng `POLL_INTERVAL_SECONDS` hoặc giảm `WORKERS`. |
+| Báo "giới hạn tốc độ" (Facebook) | Tool tự nghỉ 15 phút. Nếu bị thường xuyên: tăng thời gian quét bằng `/interval` hoặc giảm `WORKERS`. |
 | Bot không trả lời lệnh | Chỉ chat có `TELEGRAM_CHAT_ID` mới được ra lệnh. Không chạy 2 bản tool cùng 1 bot. |
 
 ## Lưu ý thực tế

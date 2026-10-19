@@ -11,8 +11,8 @@ DEFAULTS = {
     "telegram_bot_token": "",
     "telegram_chat_id": "",
     "view_threshold": 5000,
-    # Near-realtime defaults: scan every minute.
-    "poll_interval_seconds": 60,
+    # Scan every 30 minutes; change live with /interval in Telegram.
+    "poll_interval_seconds": 1800,
     "max_reel_age_days": 7,
     # Tried in order; the first metric the API returns a value for is used.
     "view_metrics": ["fb_reels_total_plays", "blue_reels_play_count"],
@@ -22,7 +22,7 @@ DEFAULTS = {
     "youtube_channels": [],
     # New videos come from the free RSS feed; with an API key, view counts cost
     # 1 quota unit per 50 videos per scan (free quota: 10,000 units/day).
-    "youtube_poll_interval_seconds": 60,
+    "youtube_poll_interval_seconds": 1800,
     # Pages/channels scanned in parallel.
     "workers": 5,
     # Reels older than this are re-checked only every slow_check_interval_seconds,

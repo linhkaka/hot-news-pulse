@@ -26,7 +26,7 @@ from config import facebook_enabled, load_config
 from graph import GraphAPIError, GraphClient, RateLimitError, TokenError, parse_fb_time
 from store import Store
 from telegram_bot import CommandBot, Telegram, TelegramError
-from youtube import YouTubeClient, YouTubeScanner
+from youtube import YouTubeClient, YouTubeScanner, format_interval
 
 log = logging.getLogger("reels_tracker")
 
@@ -87,7 +87,9 @@ class Tracker:
         self.telegram = telegram
         self.store = store
         self.clock = clock
+        # scan_requested forces a scan now; wakeup only makes the loop re-plan.
         self.scan_requested = threading.Event()
+        self.wakeup = threading.Event()
         self.last_scan_at = None
         self.last_scan_result = "chưa quét"
         self.cooldown_until = 0
@@ -102,6 +104,22 @@ class Tracker:
 
     def threshold(self):
         return int(self.store.get_setting("view_threshold", self.cfg["view_threshold"]))
+
+    def scan_interval(self, cfg_key="poll_interval_seconds"):
+        """Seconds between scans; /interval overrides the config for both platforms."""
+        return int(self.store.get_setting("scan_interval_seconds", self.cfg[cfg_key]))
+
+    def request_scan(self):
+        self.scan_requested.set()
+        self.wakeup.set()
+
+    def set_scan_interval(self, seconds):
+        """Apply a new interval right away, counted from the last scan."""
+        self.store.set_setting("scan_interval_seconds", seconds)
+        self.fb_next_due = (self.last_scan_at or self.clock()) + seconds
+        if self.youtube:
+            self.youtube.next_due = (self.youtube.last_scan_at or self.clock()) + seconds
+        self.wakeup.set()
 
     def managed_pages(self, force=False):
         """page_id -> (name, page token) for Pages the user token manages (cached)."""
@@ -155,7 +173,7 @@ class Tracker:
         name = managed[page_id][0]
         self.store.add_page(page_id, name)
         self._warned_missing.discard(page_id)
-        self.scan_requested.set()
+        self.request_scan()
         return f"✅ Đã thêm {name} ({page_id})"
 
     def add_all_pages(self):
@@ -172,7 +190,7 @@ class Tracker:
         for page_id, name in added:
             self.store.add_page(page_id, name)
             self._warned_missing.discard(page_id)
-        self.scan_requested.set()
+        self.request_scan()
         if not added:
             return f"Tất cả {len(managed)} Page bạn quản lý đã được theo dõi."
         return f"✅ Đã thêm {len(added)} Page:\n" + "\n".join(f"• {n} ({pid})" for pid, n in added)
@@ -222,7 +240,7 @@ class Tracker:
             "",
             "📘 Facebook Reels",
             f"Page đang theo dõi: {len(self.store.active_pages())}",
-            f"Quét mỗi: {self.cfg['poll_interval_seconds']} giây",
+            f"Quét mỗi: {format_interval(self.scan_interval())}",
             f"Đã gửi thông báo: {self.store.notified_count()} Reel",
         ]
         if self.last_scan_at:
@@ -385,12 +403,13 @@ class Tracker:
             ):
                 self.check_token_expiry()
                 self.scan_once()
-                self.fb_next_due = self.clock() + self.cfg["poll_interval_seconds"]
+                self.fb_next_due = self.clock() + self.scan_interval()
             if self.youtube and self.youtube.ready(forced):
                 self.youtube.scan_once()
             if once:
                 return
-            self.scan_requested.wait(max(1, self._seconds_until_next_scan()))
+            self.wakeup.wait(max(1, self._seconds_until_next_scan()))
+            self.wakeup.clear()
 
     def _seconds_until_next_scan(self):
         waits = []
@@ -436,7 +455,10 @@ def main(argv=None):
     store.seed_pages(cfg["pages"])
     tracker = Tracker(cfg, graph, telegram, store)
     api = YouTubeClient(cfg["youtube_api_key"]) if cfg["youtube_api_key"] else None
-    tracker.youtube = YouTubeScanner(cfg, store, telegram, tracker.threshold, format_age, api=api)
+    tracker.youtube = YouTubeScanner(
+        cfg, store, telegram, tracker.threshold, format_age, api=api,
+        interval_fn=lambda: tracker.scan_interval("youtube_poll_interval_seconds"),
+    )
     tracker.youtube.seed_channels(cfg["youtube_channels"])
     stop = threading.Event()
 
@@ -451,7 +473,10 @@ def main(argv=None):
             log.warning("Could not register bot commands: %s", e)
         threading.Thread(target=CommandBot(telegram, tracker).run, args=(stop,), daemon=True).start()
 
-    lines = [f"🚀 Tracker đã chạy — ngưỡng {tracker.threshold():,} view."]
+    lines = [
+        f"🚀 Tracker đã chạy — ngưỡng {tracker.threshold():,} view, "
+        f"quét mỗi {format_interval(tracker.scan_interval())}."
+    ]
     if tracker.facebook_enabled:
         page_count = len(store.active_pages())
         lines.append(f"📘 Facebook: {page_count} Page")

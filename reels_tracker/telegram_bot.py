@@ -21,6 +21,7 @@ COMMANDS = [
     ("addyt", "Thêm kênh YouTube: /addyt @handle"),
     ("removeyt", "Bỏ kênh YouTube: /removeyt <channel_id>"),
     ("threshold", "Đổi ngưỡng view: /threshold 5000"),
+    ("interval", "Đổi thời gian quét: /interval 30 (phút)"),
     ("top", "Top Reels/video nhiều view nhất"),
     ("scan", "Quét ngay"),
     ("help", "Hướng dẫn"),
@@ -121,7 +122,7 @@ class CommandBot:
                 return ("Cách dùng: /addyt @handle  (hoặc ID kênh UC..., hoặc link kênh)\n"
                         "Thêm nhiều kênh: /addyt UCaaa UCbbb")
             replies = [t.youtube.add_channel(arg) for arg in args]
-            t.scan_requested.set()
+            t.request_scan()
             return "\n".join(replies)
         if command == "removeyt":
             if not args:
@@ -145,8 +146,15 @@ class CommandBot:
                 f"{i}. {icon} {views:,} view — {source}\n   {link}"
                 for i, (icon, views, link, source) in enumerate(rows[:10], 1)
             )
+        if command == "interval":
+            if not args or not args[0].isdigit() or not 1 <= int(args[0]) <= 1440:
+                minutes = t.scan_interval() / 60
+                return (f"Đang quét mỗi {minutes:g} phút.\n"
+                        "Đổi: /interval 30 (30 phút) hoặc /interval 60 (1 giờ)")
+            t.set_scan_interval(int(args[0]) * 60)
+            return f"✅ Từ giờ quét mỗi {int(args[0])} phút (cả Facebook và YouTube)."
         if command == "scan":
-            t.scan_requested.set()
+            t.request_scan()
             return "🔄 Đang quét, có kết quả sẽ báo ngay."
         return "Không hiểu lệnh này. Gõ /help để xem danh sách lệnh."
 

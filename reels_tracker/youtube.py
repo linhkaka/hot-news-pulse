@@ -217,6 +217,14 @@ class YouTubeClient:
         return result
 
 
+def format_interval(seconds):
+    if seconds % 3600 == 0:
+        return f"{seconds // 3600} giờ"
+    if seconds % 60 == 0:
+        return f"{seconds // 60} phút"
+    return f"{seconds} giây"
+
+
 def format_video_message(channel_title, video, threshold, now, format_age):
     lines = [
         f"🔥 Video YouTube vượt {threshold:,} view",
@@ -232,8 +240,9 @@ def format_video_message(channel_title, video, threshold, now, format_age):
 
 class YouTubeScanner:
     def __init__(self, cfg, store, telegram, threshold_fn, format_age,
-                 rss=None, api=None, clock=time.time):
+                 rss=None, api=None, clock=time.time, interval_fn=None):
         self.cfg = cfg
+        self.interval_fn = interval_fn or (lambda: cfg["youtube_poll_interval_seconds"])
         self.store = store
         self.telegram = telegram
         self.threshold_fn = threshold_fn
@@ -330,7 +339,7 @@ class YouTubeScanner:
         threshold = self.threshold_fn()
         channels = self.store.active_channels()
         sent = 0
-        self.next_due = self.clock() + self.cfg["youtube_poll_interval_seconds"]
+        self.next_due = self.clock() + self.interval_fn()
         try:
             pending = {}  # video_id -> (video, channel_id, channel_title)
             with ThreadPoolExecutor(max_workers=self.cfg["workers"]) as pool:
@@ -403,7 +412,7 @@ class YouTubeScanner:
         lines = [
             f"Chế độ: {self.mode}",
             f"Kênh đang theo dõi: {len(self.store.active_channels())}",
-            f"Quét mỗi: {self.cfg['youtube_poll_interval_seconds']} giây",
+            f"Quét mỗi: {format_interval(self.interval_fn())}",
             f"Đã gửi thông báo: {self.store.yt_notified_count()} video",
         ]
         if self.api:
