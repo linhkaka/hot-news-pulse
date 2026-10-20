@@ -252,7 +252,7 @@ def summarize(cid, ads, landings, now=None):
         "page_ids": sorted(pages_all),
         "shops": sorted(shops_all),
         "ads": [{k: a.get(k) for k in ("ad_id", "page_id", "page_name", "domain", "link_url", "start_ts",
-                                       "end_ts", "is_active", "collation_count")}
+                                       "end_ts", "is_active", "collation_count", "video_url", "thumb_url")}
                 for a in sorted(ads, key=lambda a: a.get("start_ts") or 0)],
         "keywords": sorted({a["keyword"] for a in ads if a.get("keyword")}),
         "last_seen": max((a.get("last_seen") or 0) for a in ads),

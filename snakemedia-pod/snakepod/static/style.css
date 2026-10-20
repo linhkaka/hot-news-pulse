@@ -134,3 +134,6 @@ table.vt .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ell
 tr.vrow{cursor:pointer}
 tr.vrow:hover,tr.vrow.on{background:var(--soft)}
 #batchForm textarea{font:inherit;padding:8px 10px;border:1px solid var(--line);border-radius:9px;background:var(--card);color:var(--text);resize:vertical}
+.chips.markets .chip{cursor:pointer;user-select:none}
+.chips.markets input{margin:0 4px 0 0;vertical-align:-2px}
+.mediabar{margin:0 0 10px;gap:6px}

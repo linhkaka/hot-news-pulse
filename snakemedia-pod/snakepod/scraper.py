@@ -194,6 +194,8 @@ def scan_pages(page_ids, country, max_ads, log, stop=lambda: False):
 
 TIKTOK = "https://www.tiktok.com"
 CREATIVE_CENTER = "https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/en"
+TREND_VIDEOS = "https://ads.tiktok.com/business/creativecenter/inspiration/popular/video/pc/en"
+TREND_TAGS = "https://ads.tiktok.com/business/creativecenter/inspiration/popular/hashtag/pc/en"
 FB = "https://www.facebook.com"
 
 
@@ -207,6 +209,11 @@ def tiktok_url(keyword):
 
 def topads_url(country, period):
     return CREATIVE_CENTER + "?" + urlencode({"period": period, "region": country})
+
+
+def trend_url(base, country, period):
+    """Creative Center: video thịnh hành / hashtag xu hướng của 1 thị trường."""
+    return base + "?" + urlencode({"period": period, "countryCode": country, "region": country})
 
 
 def reels_url(keyword):
@@ -241,6 +248,18 @@ def scan_social(platform, keyword, country, max_items, period, log, stop=lambda:
             match=lambda u: "creative_radar_api" in u, marker="ad_title",
             parse_text=social.parse_topads_text, parse_page=lambda html: [], key="vid", noun="Top Ads",
             platform="tiktok", click_more="text=/View More|Xem thêm/i", prepare=_type_search(keyword))
+    if platform == "tiktok_trend":
+        return run_collect(
+            trend_url(TREND_VIDEOS, country, period), max_items, log, stop,
+            match=lambda u: "creative_radar_api" in u, marker=("item_url", "item_id"),
+            parse_text=social.parse_trend_videos_text, parse_page=social.parse_trend_videos_html, key="vid",
+            noun="video thịnh hành", platform="tiktok", click_more="text=/View More|Xem thêm/i")
+    if platform == "tiktok_tags":
+        return run_collect(
+            trend_url(TREND_TAGS, country, period), max_items, log, stop,
+            match=lambda u: "creative_radar_api" in u, marker="hashtag_name",
+            parse_text=social.parse_hashtags_text, parse_page=social.parse_hashtags_html, key="name",
+            noun="hashtag", platform="tiktok", click_more="text=/View More|Xem thêm/i")
     if platform == "fb_reels":
         return run_collect(
             reels_url(keyword), max_items, log, stop,

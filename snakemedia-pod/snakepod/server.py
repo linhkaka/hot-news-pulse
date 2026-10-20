@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 import threading
 
-from . import config, db, diag, jobs, notify, safety, social
+from . import config, db, diag, jobs, media, notify, safety, social
 
 STATIC = Path(__file__).parent / "static"
 LABELS = {"sap_win": "Sắp WIN", "win": "Video Win", "scale": "Video scale", "theo_doi": "Chờ thêm dữ liệu",
@@ -48,9 +48,11 @@ class FollowIn(BaseModel):
 
 
 class SocialScanIn(BaseModel):
-    platform: str               # tiktok | tiktok_ads | fb_reels
+    platform: str               # tiktok | tiktok_ads | tiktok_trend | tiktok_tags | fb_reels
     keyword: str = ""
+    keywords: list[str] = []    # nhiều từ khoá / #hashtag
     country: str = config.DEFAULT_COUNTRY
+    countries: list[str] = []   # nhiều thị trường (chỉ nguồn Creative Center dùng)
     max_items: int = 200
     period: int = 7             # Top Ads: 7 / 30 / 180 ngày
     save: bool = False
@@ -74,6 +76,12 @@ class AutoIn(BaseModel):
     enabled: bool
     hour: int
     stores: int | None = None   # số shop soi thêm mỗi đêm
+
+
+class MediaBatchIn(BaseModel):
+    cids: list[str] = []        # video QC Facebook
+    vids: list[str] = []        # video viral
+    kind: str = "video"         # video | image | both
 
 
 class MarkIn(BaseModel):
@@ -198,8 +206,14 @@ SOCIAL_SORTS = {"vph": lambda v: v["sort_vph"], "views": lambda v: v.get("views"
 @app.get("/api/viral")
 def viral(platform: str | None = None, label: str | None = None, q: str | None = None,
           product_type: str | None = None, niche: str | None = None, pod: bool = False, sort: str = "vph",
-          offset: int = 0, limit: int = 60):
+          market: str | None = None, offset: int = 0, limit: int = 60):
     items = _social_list(platform)
+    markets = {}
+    for v in items:
+        if v.get("market"):
+            markets[v["market"]] = markets.get(v["market"], 0) + 1
+    if market:
+        items = [v for v in items if v.get("market") == market]
     counts = {k: 0 for k in social.LABELS}
     for v in items:
         counts[v["label"]] += 1
@@ -221,7 +235,7 @@ def viral(platform: str | None = None, label: str | None = None, q: str | None =
     for v in page:
         v.pop("snapshots", None)
     return {"items": page, "total": len(items), "offset": max(0, offset), "facets": facets, "counts": counts,
-            "labels": social.LABELS, "platforms": social.PLATFORMS}
+            "labels": social.LABELS, "platforms": social.PLATFORMS, "markets": markets}
 
 
 @app.get("/api/viral/keywords")
@@ -230,24 +244,136 @@ def viral_keywords():
 
 
 @app.delete("/api/viral/keywords/{platform}/{keyword}")
-def delete_viral_keyword(platform: str, keyword: str):
-    db.remove_social_watch(platform, keyword.strip())   # Top Ads không từ khoá được gửi là " "
+def delete_viral_keyword(platform: str, keyword: str, country: str | None = None):
+    db.remove_social_watch(platform, keyword.strip(), country)   # Top Ads không từ khoá được gửi là " "
     return {"ok": True}
+
+
+@app.get("/api/markets")
+def markets():
+    return {"markets": config.MARKETS, "sources": social.SOURCES, "market_sources": sorted(social.MARKET_SOURCES)}
 
 
 @app.post("/api/viral/scan")
 def viral_scan(body: SocialScanIn):
-    if body.platform not in social.PLATFORMS:
+    if body.platform not in social.SOURCES:
         raise HTTPException(400, "Nền tảng không hợp lệ")
-    kw = body.keyword.strip()
-    if not kw and body.platform != "tiktok_ads":
-        raise HTTPException(400, "Thiếu từ khoá")
-    country = body.country.upper()
-    if body.save:
-        db.add_social_watch(body.platform, kw, country)
-    jobs.submit("social", f"Viral {body.platform} '{kw}'",
-                jobs.social_job(body.platform, kw, country, max(10, min(body.max_items, 1000)), body.period))
-    return {"ok": True}
+    kws = list(dict.fromkeys(k.strip() for k in [body.keyword, *body.keywords] if k and k.strip()))
+    by_market = body.platform in social.MARKET_SOURCES
+    if not kws:
+        if not by_market:
+            raise HTTPException(400, "Thiếu từ khoá")
+        kws = [""]
+    countries = list(dict.fromkeys(c.strip().upper() for c in [*body.countries] if c.strip())) or [body.country.upper()]
+    if not by_market:
+        countries = [countries[0]]        # TikTok tìm kiếm / Reels: thị trường theo tài khoản + IP, quét 1 lần
+    max_items = max(10, min(body.max_items, 1000))
+    queued = 0
+    for kw in kws[:50]:
+        for country in countries[:20]:
+            if body.save:
+                db.add_social_watch(body.platform, kw, country if by_market else "")
+            queued += jobs.submit("social", jobs.social_title(body.platform, kw, country),
+                                  jobs.social_job(body.platform, kw, country, max_items, body.period))
+    return {"ok": True, "queued": queued}
+
+
+@app.get("/api/trends")
+def trends(market: str | None = None, q: str | None = None):
+    """Hashtag xu hướng theo thị trường; đánh dấu hashtag khớp từ khoá bạn đang theo dõi."""
+    rows = db.list_trends()
+    present = sorted({r["market"] for r in rows})
+    words = {w["keyword"].lower().lstrip("#") for w in db.list_social_watch() if w["keyword"]}
+    words |= {w["keyword"].lower() for w in db.list_watch_keywords()}
+    tokens = {t for w in words for t in w.replace("#", " ").split() if len(t) > 2}
+    if market:
+        rows = [r for r in rows if r["market"] == market]
+    if q:
+        ql = q.lower().lstrip("#")
+        rows = [r for r in rows if ql in r["name"]]
+    for r in rows:
+        r["match"] = sorted(t for t in tokens if t in r["name"])
+        r["move"] = (r["prev_rank"] - r["rank"]) if r["prev_rank"] and r["rank"] else None
+    return {"items": rows, "markets": present, "names": config.MARKETS}
+
+
+# ---- tải ảnh / video ----
+
+def _media_urls(kind, key):
+    """[(link, tên gợi ý, link ảnh lưu sẵn trong máy)] của 1 QC / 1 video QC / 1 video viral."""
+    if kind == "ad":
+        a = next((a for a in db.ads_by_ids([key])), None)
+        if not a:
+            raise HTTPException(404)
+        return a.get("video_url"), a.get("thumb_url"), a.get("thumb_path"), f"qc-{key}-{media.slug(a.get('body') or a.get('title'))}"
+    if kind == "video":
+        v = db.get_video(key)
+        if not v:
+            raise HTTPException(404)
+        return v.get("video_url"), v.get("thumb_url"), v.get("thumb"), f"{v['label']}-{media.slug(v['title'])}-{key}"
+    r = db.social_row(key)
+    if not r:
+        raise HTTPException(404)
+    return r.get("video_url"), r.get("cover_url"), r.get("cover_path"), f"{r['platform']}-{media.slug(r.get('caption'))}-{r['item_id']}"
+
+
+def _media_bytes(video_url, image_url, local, kind):
+    """Tải file; ảnh hỏng link thì dùng bản đã lưu trong máy."""
+    url = video_url if kind == "video" else image_url
+    try:
+        if not url:
+            raise ValueError("QC này không có video" if kind == "video" else "Không có ảnh")
+        data, ctype = media.fetch(url)
+        return data, media.ext_for(ctype, url, kind), ctype or "application/octet-stream"
+    except Exception as e:
+        path = config.THUMB_DIR / local if (kind == "image" and local) else None
+        if path and path.exists():
+            return path.read_bytes(), ".jpg", "image/jpeg"
+        raise HTTPException(502, str(e)[:300])
+
+
+@app.get("/api/media/{kind}/{key:path}")
+def media_download(kind: str, key: str, type: str = "video"):
+    """Tải 1 file về máy (trình duyệt hỏi nơi lưu). kind: ad | video | social; type: video | image."""
+    if kind not in ("ad", "video", "social") or type not in ("video", "image"):
+        raise HTTPException(404)
+    video_url, image_url, local, name = _media_urls(kind, key)
+    data, ext, ctype = _media_bytes(video_url, image_url, local, type)
+    return Response(data, media_type=ctype, headers={"Content-Disposition": f'attachment; filename="{name}{ext}"'})
+
+
+@app.post("/api/media/batch")
+def media_batch(body: MediaBatchIn):
+    if body.kind not in ("video", "image", "both"):
+        raise HTTPException(400, "kind phải là video / image / both")
+    targets = [("video", c) for c in body.cids] + [("social", v) for v in body.vids]
+    if not targets:
+        raise HTTPException(400, "Chưa chọn video nào")
+    targets = targets[:config.MEDIA_BATCH_MAX]
+
+    def run():
+        kinds = ["video", "image"] if body.kind == "both" else [body.kind]
+        ok = fail = 0
+        folder = None
+        for kind, key in targets:
+            if jobs.should_stop():
+                break
+            try:
+                urls = _media_urls(kind, key)
+            except HTTPException:
+                continue
+            for t in kinds:
+                try:
+                    data, ext, _ = _media_bytes(*urls[:3], t)
+                    folder = media.save(data, urls[3] + ext).parent
+                    ok += 1
+                except HTTPException as e:
+                    fail += 1
+                    jobs.log(f"  bỏ qua {urls[3]} ({t}): {e.detail}")
+        jobs.log(f"Đã lưu {ok} file" + (f" vào {folder}" if folder else "") + (f", {fail} file lỗi" if fail else ""))
+        return ok
+    queued = jobs.submit("media", f"Tải {len(targets)} video ({body.kind})", run)
+    return {"queued": int(queued), "folder": str(config.MEDIA_DIR)}
 
 
 @app.get("/api/viral/{vid:path}")
@@ -393,6 +519,9 @@ def video(cid: str):
     v["page_list"] = [{"id": p, "name": names.get(p, p), "followed": ("page", p) in followed} for p in v["page_ids"]]
     v["shop_list"] = [{"domain": d, "followed": ("shop", d) in followed} for d in v["shops"]]
     _decorate([v])
+    v["media"] = {"video_url": v.get("video_url"), "image_url": v.get("thumb_url"),
+                  "video_expires_ts": media.link_expiry(v.get("video_url")), "video_expired": media.expired(v.get("video_url")),
+                  "variants": len({a["video_url"] for a in v["ads"] if a.get("video_url")})}
     v["history"] = db.history([cid], config.HISTORY_DAYS)[cid]
     v["sourcing"] = sourcing_links(v)
     return v

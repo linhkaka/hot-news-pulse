@@ -88,3 +88,12 @@ SOURCING = [
     ("Temu", "https://www.temu.com/search_result.html?search_key={q}"),
     ("CJdropshipping", "https://www.google.com/search?q=site%3Acjdropshipping.com+{q}"),
 ]
+
+# Tải ảnh / video QC: thư mục lưu khi tải hàng loạt (mặc định Downloads\SnakemediaPOD)
+MEDIA_DIR = Path(os.environ.get("SNAKEPOD_MEDIA", Path.home() / "Downloads" / "SnakemediaPOD"))
+MEDIA_BATCH_MAX = 200          # tối đa số video mỗi lần tải hàng loạt
+
+# Thị trường cho video viral. Nguồn chọn được thị trường: TikTok Top Ads, TikTok xu hướng (video / hashtag)
+# của Creative Center. TikTok tìm kiếm thường và Facebook Reels ra kết quả theo tài khoản + IP của bạn.
+MARKETS = {"US": "Mỹ", "GB": "Anh", "CA": "Canada", "AU": "Úc", "DE": "Đức", "FR": "Pháp", "IT": "Ý", "ES": "Tây Ban Nha",
+           "NL": "Hà Lan", "JP": "Nhật", "BR": "Brazil", "MX": "Mexico", "VN": "Việt Nam"}

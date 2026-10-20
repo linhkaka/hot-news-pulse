@@ -32,6 +32,8 @@ export function tiktokUrl(keyword) {
 }
 
 export const topadsUrl = (country, period) => URLS.CREATIVE_CENTER + "?" + qs({period, region: country});
+// Creative Center: video thịnh hành / hashtag xu hướng của 1 thị trường
+export const trendUrl = (base, country, period) => base + "?" + qs({period, countryCode: country, region: country});
 export const reelsUrl = keyword => `${URLS.FB}/search/videos/?` + qs({q: keyword});
 
 // ---------------- phiên quét: tab nào đang được quét ----------------
@@ -247,6 +249,12 @@ export function scanSocial(platform, keyword, country, maxItems, period, log, st
   if (platform === "tiktok_ads") return collect(topadsUrl(country, period), maxItems, log, stop, {
     match: u => u.includes("creative_radar_api"), marker: "ad_title", parseText: social.parseTopadsText, ssr: false,
     key: "vid", noun: "Top Ads", platform: "tiktok", clickMorePattern: "View More|Xem thêm", prepare: typeKeyword(keyword)});
+  if (platform === "tiktok_trend") return collect(trendUrl(URLS.TREND_VIDEOS, country, period), maxItems, log, stop, {
+    match: u => u.includes("creative_radar_api"), marker: ["item_url", "item_id"], parseText: social.parseTrendVideosText,
+    key: "vid", noun: "video thịnh hành", platform: "tiktok", clickMorePattern: "View More|Xem thêm"});
+  if (platform === "tiktok_tags") return collect(trendUrl(URLS.TREND_TAGS, country, period), maxItems, log, stop, {
+    match: u => u.includes("creative_radar_api"), marker: "hashtag_name", parseText: social.parseHashtagsText,
+    key: "name", noun: "hashtag", platform: "tiktok", clickMorePattern: "View More|Xem thêm"});
   if (platform === "fb_reels") return collect(reelsUrl(keyword), maxItems, log, stop, {
     marker: ["play_count", "video_view_count"], parseText: social.parseReelsText, key: "vid", noun: "video"});
   throw new Error(`Nền tảng không hỗ trợ: ${platform}`);

@@ -66,6 +66,32 @@ Chưa làm được (nói thẳng):
 - **Gợi ý từ Pinterest / Google Trends**: chưa làm.
 - **Kho chung trên máy chủ**: bản này gộp kho bằng file.
 
+## Tải ảnh / video QC + video viral theo thị trường (bản nâng cấp 3)
+
+- **Tải video / ảnh của QC**:
+  - Trong bảng chi tiết video có nút **⬇ Tải video** và **🖼 Tải ảnh**. Bảng "các QC" có nút ⬇ / 🖼 cho từng QC.
+  - Ở mỗi danh sách có thanh **Tải N video đang xem**: Video / Ảnh / Cả hai (tối đa 200 video mỗi lần).
+  - File lưu vào `Downloads\SnakemediaPOD` (đổi bằng biến môi trường `SNAKEPOD_MEDIA`), mỗi ngày 1 thư mục, tên file theo nội dung QC.
+  - Video TikTok / Reels: tải ảnh bìa, và tải video nếu trang đó cho phép.
+- **Link video của Facebook có hạn dùng** (thường vài ngày).
+  - Tool đọc hạn này và báo trước: "link hết hạn lúc …".
+  - Link hết hạn thì tải không được; quét lại từ khoá đó để lấy link mới.
+  - Ảnh: nếu link gốc hết hạn, tool dùng ảnh đã lưu sẵn trong app.
+- **Video viral theo thị trường**:
+  - Ô quét Video viral nhận **nhiều từ khoá / #hashtag** (cách nhau dấu phẩy) và cho chọn **nhiều thị trường**: Mỹ, Anh, Canada, Úc, Đức, Pháp, Ý, Tây Ban Nha, Hà Lan, Nhật, Brazil, Mexico, Việt Nam.
+  - Nguồn **TikTok thịnh hành** (Creative Center): video đang lên của từng thị trường, có thể lọc thêm theo từ khoá.
+  - Lọc danh sách theo thị trường.
+- **Xu hướng thị trường** (mục mới): bảng hashtag đang lên của từng nước.
+  - Có hạng, tăng/giảm hạng so với lần trước, số bài, lượt xem, biểu đồ 7 ngày.
+  - Hashtag khớp từ khoá bạn đang theo dõi được tô màu.
+  - Nút **Quét video** (tìm video TikTok của hashtag đó) và **+ Theo dõi**.
+
+Nói thẳng về thị trường:
+- Chỉ nguồn của **TikTok Creative Center** (Top Ads, Thịnh hành, Hashtag xu hướng) cho chọn nước thật sự.
+- TikTok tìm kiếm thường và Facebook Reels trả kết quả theo **tài khoản + IP** của bạn: muốn xem thị trường khác thì dùng tài khoản / mạng ở nước đó.
+- Tên trường dữ liệu của mục Thịnh hành / Hashtag là đọc theo trang hiện tại, **chưa thử trên trang thật** (môi trường phát triển bị chặn). Nếu ra 0 kết quả, gửi gói chẩn đoán.
+- Chỉ tải video để nghiên cứu sản phẩm. Đăng lại video của người khác có thể vi phạm bản quyền.
+
 ## Chế độ Video viral
 
 Mục **Viral** trên menu:

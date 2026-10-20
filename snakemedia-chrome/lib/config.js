@@ -74,6 +74,12 @@ export const C = {
     ["Temu", "https://www.temu.com/search_result.html?search_key={q}"],
     ["CJdropshipping", "https://www.google.com/search?q=site%3Acjdropshipping.com+{q}"],
   ],
+
+  MEDIA_BATCH_MAX: 200,          // tối đa số video mỗi lần tải hàng loạt (lưu vào Tải về/SnakemediaPOD)
+  // Thị trường cho video viral. Nguồn chọn được thị trường: TikTok Top Ads, TikTok thịnh hành / hashtag xu hướng
+  // của Creative Center. TikTok tìm kiếm thường và Facebook Reels ra kết quả theo tài khoản + IP của bạn.
+  MARKETS: {US: "Mỹ", GB: "Anh", CA: "Canada", AU: "Úc", DE: "Đức", FR: "Pháp", IT: "Ý", ES: "Tây Ban Nha",
+    NL: "Hà Lan", JP: "Nhật", BR: "Brazil", MX: "Mexico", VN: "Việt Nam"},
 };
 
 // Địa chỉ các trang được quét. Bài kiểm thử đổi sang trang giả trên máy (xem applyDev).
@@ -81,6 +87,8 @@ export const URLS = {
   FB: "https://www.facebook.com",
   TIKTOK: "https://www.tiktok.com",
   CREATIVE_CENTER: "https://ads.tiktok.com/business/creativecenter/inspiration/topads/pc/en",
+  TREND_VIDEOS: "https://ads.tiktok.com/business/creativecenter/inspiration/popular/video/pc/en",
+  TREND_TAGS: "https://ads.tiktok.com/business/creativecenter/inspiration/popular/hashtag/pc/en",
   TG_API: "https://api.telegram.org",
 };
 

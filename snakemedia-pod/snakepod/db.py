@@ -106,7 +106,20 @@ CREATE TABLE IF NOT EXISTS social_watch (
     country TEXT,
     added_ts INTEGER,
     last_scan_ts INTEGER,
-    PRIMARY KEY (platform, keyword)
+    PRIMARY KEY (platform, keyword, country)   -- cùng từ khoá có thể theo dõi ở nhiều thị trường
+);
+CREATE TABLE IF NOT EXISTS trends (
+    market TEXT,                   -- thị trường (US, GB, ...)
+    name TEXT,                     -- hashtag (không có dấu #)
+    rank INTEGER,
+    prev_rank INTEGER,             -- thứ hạng lần quét trước
+    rank_diff INTEGER,             -- thay đổi hạng do TikTok báo (nếu có)
+    views INTEGER,
+    posts INTEGER,
+    trend TEXT,                    -- JSON [[thời điểm, mức độ], ...]
+    first_seen INTEGER,
+    last_seen INTEGER,
+    PRIMARY KEY (market, name)
 );
 CREATE TABLE IF NOT EXISTS rate_events (
     platform TEXT,
@@ -178,16 +191,29 @@ def connect():
 
 # Cột thêm ở các bản sau: CSDL cũ được nâng cấp tự động, không mất dữ liệu
 _MIGRATIONS = [("landings", "date_source", "TEXT"), ("landings", "pod_markers", "TEXT"),
-               ("landings", "compare_price", "TEXT")]
+               ("landings", "compare_price", "TEXT"), ("social_videos", "market", "TEXT")]
 
 
 def init():
     with connect() as conn:
+        fresh = not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='ads'").fetchone()
         conn.executescript(SCHEMA)
+        if fresh:   # CSDL mới tạo: đã đúng bản mới nhất, không cần "chấm lại khi nâng cấp"
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('schema', '2')")
         for table, col, typ in _MIGRATIONS:
             cols = {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
             if col not in cols:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {col} {typ}")
+        # Bản cũ: từ khoá viral khoá theo (nền tảng, từ khoá) -> thêm thị trường vào khoá, giữ nguyên dữ liệu
+        pk = {r[1] for r in conn.execute("PRAGMA table_info(social_watch)") if r[5]}
+        if "country" not in pk:
+            conn.executescript("""
+                ALTER TABLE social_watch RENAME TO social_watch_old;
+                CREATE TABLE social_watch (platform TEXT, keyword TEXT, country TEXT, added_ts INTEGER,
+                                           last_scan_ts INTEGER, PRIMARY KEY (platform, keyword, country));
+                INSERT OR IGNORE INTO social_watch SELECT platform, keyword, COALESCE(country, ''), added_ts, last_scan_ts
+                    FROM social_watch_old;
+                DROP TABLE social_watch_old;""")
 
 
 def upsert_ads(ads, keyword=None):
@@ -210,6 +236,12 @@ def upsert_ads(ads, keyword=None):
                        last_seen=excluded.last_seen""",
                 {**a, "keyword": keyword, "now": now},
             )
+
+
+def ads_by_ids(ids):
+    ids = list(ids)
+    with connect() as conn:
+        return [dict(r) for r in conn.execute(f"SELECT * FROM ads WHERE ad_id IN ({','.join('?' * len(ids))})", ids)] if ids else []
 
 
 def ads_missing_thumbs():
@@ -378,16 +410,18 @@ def shop_rows():
 
 # ---- video viral (TikTok / Facebook Reels) ----
 
-def upsert_social(items, keyword=None, now=None):
-    """Lưu video + 1 bản chụp số liệu (để tính tốc độ tăng thật giữa các lần quét)."""
+def upsert_social(items, keyword=None, now=None, market=None):
+    """Lưu video + 1 bản chụp số liệu (để tính tốc độ tăng thật giữa các lần quét).
+    market: thị trường của nguồn quét (chỉ nguồn chọn được thị trường mới có)."""
     now = now or int(time.time())
     with _lock, connect() as conn:
         for it in items:
             conn.execute(
                 """INSERT INTO social_videos (vid, platform, item_id, url, author, caption, cover_url, video_url,
-                       views, likes, comments, shares, saves, created_ts, duration, extra, keyword, first_seen, last_seen)
+                       views, likes, comments, shares, saves, created_ts, duration, extra, keyword, first_seen, last_seen, market)
                    VALUES (:vid, :platform, :item_id, :url, :author, :caption, :cover_url, :video_url,
-                       :views, :likes, :comments, :shares, :saves, :created_ts, :duration, :extra, :keyword, :now, :now)
+                       :views, :likes, :comments, :shares, :saves, :created_ts, :duration, :extra, :keyword, :now, :now,
+                       :market)
                    ON CONFLICT(vid) DO UPDATE SET
                        url=COALESCE(excluded.url, social_videos.url),
                        caption=COALESCE(excluded.caption, social_videos.caption),
@@ -401,8 +435,9 @@ def upsert_social(items, keyword=None, now=None):
                        created_ts=COALESCE(social_videos.created_ts, excluded.created_ts),
                        extra=COALESCE(excluded.extra, social_videos.extra),
                        keyword=COALESCE(social_videos.keyword, excluded.keyword),
+                       market=COALESCE(excluded.market, social_videos.market),
                        last_seen=excluded.last_seen""",
-                {**it, "keyword": keyword, "now": now})
+                {**it, "keyword": keyword, "now": now, "market": it.get("market") or market})
             conn.execute("INSERT INTO social_snapshots (vid, ts, views, likes, comments, shares) VALUES (?, ?, ?, ?, ?, ?)",
                          (it["vid"], now, it.get("views"), it.get("likes"), it.get("comments"), it.get("shares")))
 
@@ -448,20 +483,51 @@ def add_social_watch(platform, keyword, country):
                      (platform, keyword, country, int(time.time())))
 
 
-def remove_social_watch(platform, keyword):
+def remove_social_watch(platform, keyword, country=None):
+    """country=None: bỏ theo dõi ở mọi thị trường."""
     with _lock, connect() as conn:
-        conn.execute("DELETE FROM social_watch WHERE platform=? AND keyword=?", (platform, keyword))
+        if country is None:
+            conn.execute("DELETE FROM social_watch WHERE platform=? AND keyword=?", (platform, keyword))
+        else:
+            conn.execute("DELETE FROM social_watch WHERE platform=? AND keyword=? AND country=?", (platform, keyword, country))
 
 
 def list_social_watch():
     with connect() as conn:
-        return [dict(r) for r in conn.execute("SELECT * FROM social_watch ORDER BY platform, keyword")]
+        return [dict(r) for r in conn.execute("SELECT * FROM social_watch ORDER BY platform, keyword, country")]
 
 
-def touch_social_watch(platform, keyword):
+def touch_social_watch(platform, keyword, country=None):
     with _lock, connect() as conn:
-        conn.execute("UPDATE social_watch SET last_scan_ts=? WHERE platform=? AND keyword=?",
-                     (int(time.time()), platform, keyword))
+        if country is None:
+            conn.execute("UPDATE social_watch SET last_scan_ts=? WHERE platform=? AND keyword=?",
+                         (int(time.time()), platform, keyword))
+        else:
+            conn.execute("UPDATE social_watch SET last_scan_ts=? WHERE platform=? AND keyword=? AND country=?",
+                         (int(time.time()), platform, keyword, country))
+
+
+# ---- hashtag xu hướng theo thị trường (TikTok Creative Center) ----
+
+def upsert_trends(market, items, now=None):
+    now = now or int(time.time())
+    with _lock, connect() as conn:
+        for it in items:
+            old = conn.execute("SELECT rank, first_seen FROM trends WHERE market=? AND name=?", (market, it["name"])).fetchone()
+            conn.execute("INSERT OR REPLACE INTO trends VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                         (market, it["name"], it.get("rank"), old[0] if old else None, it.get("rank_diff"), it.get("views"),
+                          it.get("posts"), json.dumps(it.get("trend") or []), old[1] if old else now, now))
+
+
+def list_trends(market=None):
+    with connect() as conn:
+        q, args = "SELECT * FROM trends", ()
+        if market:
+            q, args = q + " WHERE market=?", (market,)
+        rows = [dict(r) for r in conn.execute(q + " ORDER BY market, rank IS NULL, rank, name", args)]
+    for r in rows:
+        r["trend"] = json.loads(r["trend"] or "[]")
+    return rows
 
 
 # ---- chế độ an toàn: nhật ký lượt quét theo nền tảng ----

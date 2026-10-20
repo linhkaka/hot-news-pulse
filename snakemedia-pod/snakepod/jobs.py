@@ -196,7 +196,7 @@ def fetch_social_covers():
     with httpx.Client(timeout=20, follow_redirects=True, headers=headers) as c:
         def work(v):
             ref = {"tiktok": "https://www.tiktok.com/", "tiktok_ads": "https://ads.tiktok.com/",
-                   "fb_reels": "https://www.facebook.com/"}.get(v["platform"])
+                   "tiktok_trend": "https://ads.tiktok.com/", "fb_reels": "https://www.facebook.com/"}.get(v["platform"])
             r = c.get(v["cover_url"], headers={"Referer": ref} if ref else None)
             r.raise_for_status()
             name = "s_" + "".join(ch if ch.isalnum() else "_" for ch in v["vid"]) + ".jpg"
@@ -205,18 +205,29 @@ def fetch_social_covers():
         _parallel(todo, work, "ảnh bìa")
 
 
+def social_title(platform, keyword, country):
+    from . import social
+    return f"Viral {platform} '{keyword}'" + (f" {country}" if platform in social.MARKET_SOURCES else "")
+
+
 def social_job(platform, keyword, country, max_items, period=7):
-    """Quét video viral 1 nền tảng theo từ khoá (Top Ads: từ khoá có thể bỏ trống)."""
+    """Quét video viral 1 nguồn theo từ khoá / hashtag (Top Ads, thịnh hành, hashtag xu hướng: từ khoá có thể bỏ trống).
+    Nguồn Creative Center quét đúng thị trường `country`; TikTok tìm kiếm / Reels theo tài khoản + IP của bạn."""
     from . import scraper, social
 
     def run():
-        name = social.PLATFORMS[platform]
-        log(f"Quét {name} '{keyword or 'tất cả'}' ({country})")
+        name = social.SOURCES[platform]
+        by_market = platform in social.MARKET_SOURCES
+        log(f"Quét {name} '{keyword or 'tất cả'}'" + (f" ({country})" if by_market else ""))
         safety.before_scan(safety.platform_of(platform), log, should_stop)
         items = scraper.scan_social(platform, keyword, country, max_items, period, log, should_stop)
+        db.touch_social_watch(platform, keyword, country if by_market else "")
+        if platform == "tiktok_tags":
+            db.upsert_trends(country, items)
+            log(f"Đọc được {len(items)} hashtag xu hướng ({country})")
+            return len(items)
         log(f"Đọc được {len(items)} video {name}")
-        db.upsert_social(items, keyword or None)
-        db.touch_social_watch(platform, keyword)
+        db.upsert_social(items, keyword or None, market=country if by_market else None)
         fetch_social_covers()
         vids = {it["vid"] for it in items}
         snaps = db.social_snapshots(vids)
@@ -236,8 +247,9 @@ def queue_all_watched(reason):
     for f in db.list_follows():
         n += submit("follow", f"Theo dõi {f['kind']} {f['name'] or f['key']}", follow_job(f["kind"], f["key"], country))
     for w in db.list_social_watch():
-        n += submit("social", f"Viral {w['platform']} '{w['keyword']}'",
-                    social_job(w["platform"], w["keyword"], w["country"] or country, config.DEFAULT_MAX_ADS))
+        c = w["country"] or country
+        n += submit("social", social_title(w["platform"], w["keyword"], c),
+                    social_job(w["platform"], w["keyword"], c, config.DEFAULT_MAX_ADS))
     n_stores = int(auto_settings().get("stores", config.AUTO_SWEEP_STORES))
     n += queue_sweeps([r["domain"] for r in store_rows() if r["status"] == "pending"][:n_stores], country)
     log(f"{reason}: xếp {n} việc quét")

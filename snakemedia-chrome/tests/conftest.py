@@ -71,6 +71,7 @@ class Ext:
         cfg.update(config)
         self.js("d => SP.setDev(d)", {"config": cfg, "matches": ["http://127.0.0.1/*", "http://localhost/*"],
                                       "urls": {"FB": base, "TIKTOK": base, "CREATIVE_CENTER": base + "/topads",
+                                               "TREND_VIDEOS": base + "/trend-video", "TREND_TAGS": base + "/trend-hashtag",
                                                "TG_API": base + "/tg"}})
 
     def wait_idle(self, timeout=90):
@@ -97,7 +98,17 @@ def ext(pw, tmp_path):
         str(tmp_path / "profile"), headless=True,
         args=[f"--disable-extensions-except={EXT}", f"--load-extension={EXT}"],
         **({"executable_path": exe} if exe else {"channel": "chromium"}))
-    sw = ctx.service_workers[0] if ctx.service_workers else ctx.wait_for_event("serviceworker")
+    sw = None
+    for _ in range(30):                      # phần nền có thể khởi động trước khi kịp nghe sự kiện -> hỏi lại nhiều lần
+        if ctx.service_workers:
+            sw = ctx.service_workers[0]
+            break
+        try:
+            sw = ctx.wait_for_event("serviceworker", timeout=1000)
+            break
+        except Exception:
+            pass
+    assert sw, "phần nền của tiện ích không khởi động"
     for _ in range(100):                     # đợi module phần nền chạy xong
         if sw.evaluate("typeof self.SP !== 'undefined'"):
             break

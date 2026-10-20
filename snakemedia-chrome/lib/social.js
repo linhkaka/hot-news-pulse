@@ -9,8 +9,14 @@ import {C} from "./config.js";
 import {classify} from "./pod.js";
 import {loadsMany} from "./fbparser.js";
 
-export const PLATFORMS = {tiktok: "TikTok", tiktok_ads: "TikTok Top Ads", fb_reels: "Facebook Reels"};
-export const LABELS = {dang_no: "Đang nổ", viral: "Viral", dang_len: "Đang lên", binh_thuong: "Bình thường", top_ads: "Top Ads"};
+export const PLATFORMS = {tiktok: "TikTok", tiktok_ads: "TikTok Top Ads", tiktok_trend: "TikTok thịnh hành",
+  fb_reels: "Facebook Reels"};
+// Nguồn quét: các nền tảng video ở trên + bảng hashtag xu hướng (không phải video)
+export const SOURCES = {...PLATFORMS, tiktok_tags: "TikTok hashtag xu hướng"};
+// Nguồn chọn được thị trường (Creative Center). TikTok tìm kiếm / Reels: theo tài khoản + IP của bạn.
+export const MARKET_SOURCES = new Set(["tiktok_ads", "tiktok_trend", "tiktok_tags"]);
+export const LABELS = {dang_no: "Đang nổ", viral: "Viral", dang_len: "Đang lên", binh_thuong: "Bình thường", top_ads: "Top Ads",
+  xu_huong: "Thịnh hành"};
 const HOUR = 3600;
 const isObj = v => v !== null && typeof v === "object" && !Array.isArray(v);
 const SCRIPT_RE = /<script\b[^>]*\btype="application\/json"[^>]*>([\s\S]*?)<\/script>/g;
@@ -125,6 +131,46 @@ export function topadsItem(d) {
 
 export const parseTopadsText = text => collectItems(loadsMany(text), topadsItem);
 
+// ---------------- TikTok Creative Center: video thịnh hành + hashtag xu hướng theo thị trường ----------------
+
+// Video trong bảng "video thịnh hành" của Creative Center (không có số lượt xem).
+export function trendVideoItem(d) {
+  const rawId = d.item_id || d.id;
+  const url = str(d.item_url);
+  if (!rawId || d.ad_title || isObj(d.stats) || !(url || (d.item_id && d.cover))) return null;
+  if (url && !url.includes("tiktok.com")) return null;
+  const itemId = String(rawId);
+  const market = str(d.country_code);
+  const extra = typeof d.region === "string" ? {region: d.region} : null;
+  return {
+    vid: `tiktok_trend:${itemId}`, platform: "tiktok_trend", item_id: itemId,
+    url: url || `https://www.tiktok.com/@_/video/${itemId}`, author: null, caption: textOf(d.title),
+    cover_url: str(d.cover), video_url: null, views: null, likes: null, comments: null, shares: null, saves: null,
+    created_ts: null, duration: toInt(d.duration), extra: extra ? JSON.stringify(extra) : null,
+    market: market ? market.toUpperCase() : null,
+  };
+}
+
+export const parseTrendVideosText = text => collectItems(loadsMany(text), trendVideoItem);
+export const parseTrendVideosHtml = html => collectItems(htmlBlobs(html), trendVideoItem);
+
+export function hashtagItem(d) {
+  const name = d.hashtag_name;
+  if (typeof name !== "string" || !name.trim()) return null;
+  const trend = (Array.isArray(d.trend) ? d.trend : []).filter(isObj).map(p => [toInt(p.time), p.value ?? null]);
+  const ci = isObj(d.country_info) ? d.country_info : {};
+  return {name: name.trim().replace(/^#+/, "").toLowerCase(), rank: toInt(d.rank), rank_diff: toInt(d.rank_diff),
+    views: toInt(d.video_views), posts: toInt(d.publish_cnt), trend, market: str(ci.id)};
+}
+
+function collectTags(blobs) {
+  const out = new Map();
+  for (const blob of blobs) for (const d of walk(blob)) { const it = hashtagItem(d); if (it) out.set(it.name, it); }
+  return [...out.values()];
+}
+export const parseHashtagsText = text => collectTags(loadsMany(text));
+export const parseHashtagsHtml = html => collectTags(htmlBlobs(html));
+
 // ---------------- Facebook Reels (THỬ NGHIỆM) ----------------
 
 // Node video/reel trong GraphQL của Facebook. Cấu trúc hay đổi -> đọc lỏng tay, thiếu gì để trống.
@@ -198,7 +244,12 @@ export function summarize(row, snapshots, t = null) {
 
   const checks = [];
   let label;
-  if (row.platform === "tiktok_ads") {
+  if (row.platform === "tiktok_trend") {
+    label = "xu_huong";
+    const where = row.market ? ` · thị trường ${row.market}` : "";
+    checks.push({ok: true, text: `Nằm trong video thịnh hành của TikTok Creative Center${where}`});
+    checks.push({ok: null, text: "Creative Center không công bố lượt xem của video thịnh hành"});
+  } else if (row.platform === "tiktok_ads") {
     label = "top_ads";
     const ex = v.extra;
     checks.push({ok: true, text: "Nằm trong Top Ads của TikTok Creative Center"});

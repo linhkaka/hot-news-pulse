@@ -8,6 +8,7 @@ import * as notify from "./notify.js";
 import * as safety from "./safety.js";
 import * as social from "./social.js";
 import * as demo from "./demo.js";
+import * as media from "./media.js";
 
 export class HttpError extends Error {
   constructor(status, detail) { super(detail); this.status = status; }
@@ -154,6 +155,8 @@ route("GET", "/api/videos/{cid}", async ({params}) => {
   await decorate([v]);
   v.history = (await db.history([v.cid], C.HISTORY_DAYS))[v.cid];
   v.sourcing = sourcingLinks(v);
+  v.media = {video_url: v.video_url, image_url: v.thumb_url, video_expires_ts: media.linkExpiry(v.video_url),
+    video_expired: media.expired(v.video_url), variants: new Set(v.ads.map(a => a.video_url).filter(Boolean)).size};
   return clean(v);
 });
 
@@ -266,6 +269,9 @@ const SOCIAL_SORTS = {vph: v => v.sort_vph, views: v => v.views || 0, likes: v =
 
 route("GET", "/api/viral", async ({q}) => {
   let items = await socialList(str(q, "platform"));
+  const markets = {};
+  for (const v of items) if (v.market) markets[v.market] = (markets[v.market] || 0) + 1;
+  if (str(q, "market")) items = items.filter(v => v.market === q.get("market"));
   const counts = Object.fromEntries(Object.keys(social.LABELS).map(k => [k, 0]));
   for (const v of items) counts[v.label] += 1;
   if (str(q, "label")) items = items.filter(v => v.label === q.get("label"));
@@ -284,25 +290,71 @@ route("GET", "/api/viral", async ({q}) => {
   const page = pageOf(items, int(q, "offset", 0), int(q, "limit", 60)).map(({snapshots, ...v}) => v);
   await withThumbs(page, "cover_path", "cover_src");
   return {items: page, total: items.length, offset: Math.max(0, int(q, "offset", 0)), facets: f, counts,
-    labels: social.LABELS, platforms: social.PLATFORMS};
+    labels: social.LABELS, platforms: social.PLATFORMS, markets};
 });
 
 route("GET", "/api/viral/keywords", () => db.listSocialWatch());
 
-route("DELETE", "/api/viral/keywords/{platform}/{keyword}", async ({params}) => {
-  await db.removeSocialWatch(params.platform, params.keyword.trim());   // Top Ads không từ khoá được gửi là " "
+route("DELETE", "/api/viral/keywords/{platform}/{keyword}", async ({params, q}) => {
+  // Top Ads không từ khoá được gửi là " "; không có ?country = bỏ ở mọi thị trường
+  await db.removeSocialWatch(params.platform, params.keyword.trim(), q.has("country") ? q.get("country") : null);
   return {ok: true};
 });
 
+route("GET", "/api/markets", () => ({markets: C.MARKETS, sources: social.SOURCES, market_sources: [...social.MARKET_SOURCES].sort()}));
+
 route("POST", "/api/viral/scan", async ({body}) => {
-  need(body.platform in social.PLATFORMS, "Nền tảng không hợp lệ");
-  const kw = String(body.keyword || "").trim();
-  need(kw || body.platform === "tiktok_ads", "Thiếu từ khoá");
-  const country = String(body.country || C.DEFAULT_COUNTRY).toUpperCase();
-  if (body.save) await db.addSocialWatch(body.platform, kw, country);
-  jobs.submit("social", `Viral ${body.platform} '${kw}'`, {platform: body.platform, keyword: kw, country,
-    max_items: Math.max(10, Math.min(+body.max_items || 200, 1000)), period: +body.period || 7});
-  return {ok: true};
+  need(body.platform in social.SOURCES, "Nền tảng không hợp lệ");
+  let kws = [...new Set([body.keyword, ...(body.keywords || [])].map(k => String(k || "").trim()).filter(Boolean))];
+  const byMarket = social.MARKET_SOURCES.has(body.platform);
+  if (!kws.length) { need(byMarket, "Thiếu từ khoá"); kws = [""]; }
+  let countries = [...new Set((body.countries || []).map(c => String(c).trim().toUpperCase()).filter(Boolean))];
+  if (!countries.length) countries = [String(body.country || C.DEFAULT_COUNTRY).toUpperCase()];
+  if (!byMarket) countries = [countries[0]];        // TikTok tìm kiếm / Reels: thị trường theo tài khoản + IP, quét 1 lần
+  const maxItems = Math.max(10, Math.min(+body.max_items || 200, 1000));
+  let queued = 0;
+  for (const kw of kws.slice(0, 50)) for (const country of countries.slice(0, 20)) {
+    if (body.save) await db.addSocialWatch(body.platform, kw, byMarket ? country : "");
+    queued += jobs.submit("social", jobs.socialTitle(body.platform, kw, country),
+      {platform: body.platform, keyword: kw, country, max_items: maxItems, period: +body.period || 7});
+  }
+  return {ok: true, queued};
+});
+
+// Hashtag xu hướng theo thị trường; đánh dấu hashtag khớp từ khoá bạn đang theo dõi.
+route("GET", "/api/trends", async ({q}) => {
+  let rows = await db.listTrends();
+  const present = [...new Set(rows.map(r => r.market))].sort();
+  const words = new Set([...(await db.listSocialWatch()).filter(w => w.keyword).map(w => w.keyword.toLowerCase().replace(/^#+/, "")),
+    ...(await db.listWatchKeywords()).map(w => w.keyword.toLowerCase())]);
+  const tokens = new Set([...words].flatMap(w => w.replace(/#/g, " ").split(/\s+/)).filter(t => t.length > 2));
+  if (str(q, "market")) rows = rows.filter(r => r.market === q.get("market"));
+  if (str(q, "q")) { const ql = q.get("q").toLowerCase().replace(/^#+/, ""); rows = rows.filter(r => r.name.includes(ql)); }
+  for (const r of rows) {
+    r.match = [...tokens].filter(t => r.name.includes(t)).sort();
+    r.move = r.prev_rank && r.rank ? r.prev_rank - r.rank : null;
+  }
+  return {items: rows, markets: present, names: C.MARKETS};
+});
+
+// ---------------- tải ảnh / video (trình tải của Chrome) ----------------
+
+route("GET", "/api/media/{kind}/{key:path}", async ({params, q}) => {
+  const type = q.get("type") || "video";
+  need(["ad", "video", "social"].includes(params.kind) && ["video", "image"].includes(type), "Not Found", 404);
+  const t = await jobs.mediaTarget(params.kind, params.key);
+  need(t, "Not Found", 404);
+  try {
+    return await media.download({url: type === "video" ? t.video : t.image, local: t.local, kind: type, name: t.name});
+  } catch (e) { throw new HttpError(502, e.message); }
+});
+
+route("POST", "/api/media/batch", async ({body}) => {
+  need(["video", "image", "both"].includes(body.kind || "video"), "kind phải là video / image / both");
+  const targets = [...(body.cids || []).map(c => ["video", c]), ...(body.vids || []).map(v => ["social", v])].slice(0, C.MEDIA_BATCH_MAX);
+  need(targets.length, "Chưa chọn video nào");
+  const queued = jobs.submit("media", `Tải ${targets.length} video (${body.kind || "video"})`, {targets, kind: body.kind || "video"});
+  return {queued: queued ? 1 : 0, folder: "Tải về/SnakemediaPOD"};
 });
 
 route("GET", "/api/viral/{vid:path}", async ({params}) => {

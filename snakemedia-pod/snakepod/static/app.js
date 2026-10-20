@@ -30,7 +30,7 @@ const act = (name, ...args) => `data-act="${name}" data-args="${esc(JSON.stringi
 const LABEL = {sap_win: ["Sắp WIN", "p"], win: ["Video Win", "g"], scale: ["Video scale", ""], theo_doi: ["Chờ thêm dữ liệu", ""],
   trang_cu: ["Trang bán cũ", "r"], cu: ["Video già", "r"]};
 const TABS = ["potential", "cow", "test", "hidden", "dig"];   // danh sách video lọc theo tab (không theo nhãn)
-const TITLES = {potential: "Video Tiềm Năng", cow: "SP bò sữa", test: "Video test", hidden: "Đã ẩn", dig: "Đào sâu",
+const TITLES = {trends: "Xu hướng thị trường", potential: "Video Tiềm Năng", cow: "SP bò sữa", test: "Video test", hidden: "Đã ẩn", dig: "Đào sâu",
   stores: "Quét store win", history: "Lịch sử quét", data: "Góp kho dữ liệu", notify: "Thông báo", safety: "Chế độ an toàn", viral: "Video viral", spread: "QC Facebook đang lan nhanh", overview: "Tổng quan", scan: "Quét từ khoá", all: "Tất cả video", niches: "Niche POD",
   follows: "Theo dõi đặc biệt", keywords: "Tự quét mỗi đêm", shops: "Kho shop"};
 const DATE_SOURCE = {api: "dữ liệu sản phẩm", uuid: "ước tính từ mã sản phẩm", anh: "ước tính từ ảnh sản phẩm"};
@@ -39,12 +39,15 @@ const POD_KEYWORDS = ["personalized dog shirt", "custom name mug", "personalized
   "christmas blanket"];
 
 let view = location.hash.slice(1) || "overview", openCid = null, openVid = null;
-const viralFilters = {platform: "", label: "", sort: "vph"};
+const viralFilters = {platform: "", label: "", sort: "vph", market: ""};
 const VLABEL = {dang_no: ["Đang nổ", "r"], viral: ["Viral", "p"], dang_len: ["Đang lên", "g"], binh_thuong: ["Bình thường", ""],
-  top_ads: ["Top Ads", "o"]};
+  top_ads: ["Top Ads", "o"], xu_huong: ["Thịnh hành", "o"]};
 const SORTS = {vph: "Xếp: xem/giờ", views: "Xếp: lượt xem", likes: "Xếp: lượt thích", engagement: "Xếp: tương tác",
   new: "Xếp: mới nhất"};
-const PLATFORM = {tiktok: "TikTok", tiktok_ads: "TikTok Top Ads", fb_reels: "Facebook Reels"};
+const PLATFORM = {tiktok: "TikTok", tiktok_ads: "TikTok Top Ads", tiktok_trend: "TikTok thịnh hành", fb_reels: "Facebook Reels"};
+// Thị trường + nguồn chọn được thị trường (lấy 1 lần từ máy chủ / phần nền)
+let marketsP = null;
+const getMarkets = () => (marketsP ||= api("/api/markets"));
 const num = n => n == null ? "?" : n >= 1e9 ? (n / 1e9).toFixed(1) + "B" : n >= 1e6 ? (n / 1e6).toFixed(1) + "M"
   : n >= 1e3 ? (n / 1e3).toFixed(1) + "K" : String(n);
 const cover = v => v.cover_src || (v.cover_path && !IS_EXT ? `/thumbs/${encodeURIComponent(v.cover_path)}` : v.cover_url) || "";
@@ -214,14 +217,59 @@ async function renderList(label, extra = {}) {
   if (!items.length) return note + bar + `<div class="list"><div class="empty">Chưa có video nào ở mục này.<br>Vào <a ${act("setView", "scan")}><b>Quét từ khoá</b></a> để bắt đầu.</div></div>`;
   // SP bò sữa mặc định xem dạng bảng
   const lay = extra.tab === "cow" && layout === "list" ? "table" : layout;
-  return note + bar + wrapItems(items, row, fbCard, fbTable, lay) + pager(total);
+  pageItems = {cids: items.map(v => v.cid), vids: []};
+  return note + bar + mediaBar(items.length) + wrapItems(items, row, fbCard, fbTable, lay) + pager(total);
 }
+
+// ---------------- tải ảnh / video ----------------
+
+let pageItems = {cids: [], vids: []};   // video đang hiện trên trang (để tải cả trang)
+
+function mediaBar(n) {
+  return `<div class="toolbar mediabar"><span class="note">Tải ${n} video đang xem:</span>
+    <button class="small" ${act("batchMedia", "video")}>⬇ Video</button>
+    <button class="small" ${act("batchMedia", "image")}>🖼 Ảnh</button>
+    <button class="small" ${act("batchMedia", "both")}>⬇ Cả hai</button>
+    <span class="note">— lưu vào thư mục ${IS_EXT ? "Tải về (Downloads)/SnakemediaPOD" : "Downloads\\SnakemediaPOD"}</span></div>`;
+}
+
+function saveBlob(name, blob) {
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement("a"), {href: url, download: name});
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 30000);
+}
+
+// kind: ad (1 QC) | video (video QC) | social (video viral); type: video | image
+async function downloadMedia(kind, key, type) {
+  const path = `/api/media/${kind}/${enc(key)}?type=${type}`;
+  try {
+    if (IS_EXT) { await api(path); return; }          // tiện ích: Chrome tự tải về thư mục Tải về
+    const r = await fetch(path);
+    if (!r.ok) { let m = r.status; try { m = (await r.json()).detail || m; } catch {} throw new Error(m); }
+    const name = (/filename="([^"]+)"/.exec(r.headers.get("content-disposition") || "") || [])[1] || "media";
+    saveBlob(name, await r.blob());
+  } catch (e) { alert("Không tải được: " + e.message); }
+}
+
+async function batchMedia(kind) {
+  if (!pageItems.cids.length && !pageItems.vids.length) return alert("Trang này chưa có video nào");
+  try {
+    const r = await post("/api/media/batch", {...pageItems, kind});
+    pollJobs();
+    alert(`Đang tải ${pageItems.cids.length + pageItems.vids.length} video vào ${IS_EXT ? "thư mục Tải về/SnakemediaPOD" : r.folder}. Xem tiến độ ở Nhật ký.`);
+  } catch (e) { alert(e.message); }
+}
+
+const fmtTime = ts => ts ? new Date(ts * 1000).toLocaleString("vi-VN", {day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit"}) : "?";
 
 // ---------------- Video viral ----------------
 
 function socialMeta(v) {
   const parts = [`<span class="chip">${esc(PLATFORM[v.platform] || v.platform)}</span>`];
-  if (v.platform === "tiktok_ads") {
+  if (v.platform === "tiktok_trend") {
+    if (v.duration) parts.push(`${v.duration} giây`);
+  } else if (v.platform === "tiktok_ads") {
     if (v.likes != null) parts.push(`❤ ${num(v.likes)}`);
     if (v.extra.ctr != null) parts.push(`CTR ${esc(v.extra.ctr)}`);
     if (v.extra.cost != null) parts.push(`ngân sách mức ${esc(v.extra.cost)}`);
@@ -233,7 +281,7 @@ function socialMeta(v) {
     if (v.share_rate != null) parts.push(`chia sẻ ${v.share_rate}%`);
   }
   if (v.author) parts.push("@" + esc(v.author));
-  return parts.join(" · ") + podChips(v);
+  return parts.join(" · ") + podChips(v) + (v.market ? `<span class="chip">🌍 ${esc(v.market)}</span>` : "");
 }
 
 function socialRow(v) {
@@ -249,33 +297,42 @@ async function renderViral() {
   const p = new URLSearchParams({sort: viralFilters.sort});
   const q = $("#search").value.trim();
   if (q) p.set("q", q);
-  for (const k of ["platform", "label"]) if (viralFilters[k]) p.set(k, viralFilters[k]);
+  for (const k of ["platform", "label", "market"]) if (viralFilters[k]) p.set(k, viralFilters[k]);
   for (const k of ["product_type", "niche"]) if (filters[k]) p.set(k, filters[k]);
   if (filters.pod) p.set("pod", "true");
   p.set("offset", pageOffset); p.set("limit", PAGE);
-  const [res, kws] = await Promise.all([api("/api/viral?" + p), api("/api/viral/keywords")]);
+  const [res, kws, mk] = await Promise.all([api("/api/viral?" + p), api("/api/viral/keywords"), getMarkets()]);
   const {items, facets, counts, total} = res;
   $("#cnt-viral").textContent = (counts.dang_no || 0) + (counts.viral || 0);
   const opt = (obj, cur, all) => `<option value="">${all}</option>` + Object.entries(obj).map(([k, n]) =>
     `<option value="${k}" ${k === cur ? "selected" : ""}>${esc(n)}</option>`).join("");
   const fopt = (list, cur) => list.map(x => `<option value="${esc(x.name)}" ${x.name === cur ? "selected" : ""}>${esc(x.name)} (${x.count})</option>`).join("");
-  const form = `<form class="scan" id="viralForm">
-      <select name="platform"><option value="tiktok">TikTok (tự nhiên)</option><option value="tiktok_ads">TikTok Top Ads</option>
-        <option value="fb_reels">Facebook Reels (thử nghiệm)</option></select>
-      <input name="keyword" placeholder="Từ khoá hoặc #hashtag (Top Ads có thể để trống)">
-      <input name="country" value="US" size="3" title="Quốc gia">
-      <select name="period" title="Top Ads: khoảng thời gian"><option value="7">7 ngày</option><option value="30">30 ngày</option><option value="180">180 ngày</option></select>
-      <label class="note"><input type="checkbox" name="save" checked> Tự quét mỗi đêm</label>
-      <button class="primary">Quét</button></form>
+  const form = `<form class="card" id="viralForm" style="margin-bottom:12px">
+      <div class="toolbar" style="margin:0 0 8px">
+        <select name="platform"><option value="tiktok">TikTok tìm kiếm (từ khoá / #hashtag)</option>
+          <option value="tiktok_trend">TikTok thịnh hành (theo thị trường)</option>
+          <option value="tiktok_ads">TikTok Top Ads (theo thị trường)</option>
+          <option value="fb_reels">Facebook Reels (thử nghiệm)</option></select>
+        <input name="keywords" placeholder="Từ khoá / #hashtag, cách nhau bằng dấu phẩy — vd: dog mom, #nursesoftiktok" style="flex:1;min-width:260px">
+        <select name="period" title="Khoảng thời gian (Creative Center)"><option value="7">7 ngày</option><option value="30">30 ngày</option><option value="120">120 ngày</option></select>
+        <label class="note"><input type="checkbox" name="save" checked> Tự quét mỗi đêm</label>
+        <button class="primary">Quét</button></div>
+      <div class="chips markets">${Object.entries(mk.markets).map(([c, n]) =>
+        `<label class="chip"><input type="checkbox" name="countries" value="${c}" ${c === "US" ? "checked" : ""}> ${c} · ${esc(n)}</label>`).join("")}</div>
+      <p class="note" style="margin:6px 0 0"><b>Thị trường</b> chỉ áp dụng cho nguồn Creative Center (TikTok thịnh hành, Top Ads, hashtag xu hướng):
+      mỗi thị trường = 1 lượt quét. TikTok tìm kiếm và Facebook Reels <b>không chọn được thị trường</b> — kết quả theo tài khoản + IP của bạn.
+      Nguồn Creative Center có thể bỏ trống từ khoá (lấy toàn bộ danh sách thịnh hành).</p></form>
     <p class="note">${IS_EXT ? "Tiện ích dùng tài khoản TikTok / Facebook đang đăng nhập trên Chrome này (mục Chế độ an toàn → nút Đăng nhập)."
       : 'TikTok và Facebook Reels cần đăng nhập 1 lần (menu Start → "Đăng nhập TikTok" / "Đăng nhập Facebook").'}
     Mỗi lần quét lưu lại số liệu, nên từ lần quét thứ 2 ${NOUN.toLowerCase()} tính được <b>tốc độ tăng thật</b> (xem/giờ giữa 2 lần quét).</p>
-    ${kws.length ? `<div class="chips">${kws.map(k => `<span class="chip">${esc(PLATFORM[k.platform])}: ${esc(k.keyword || "tất cả")}
-      <a ${act("removeViralKw", k.platform, k.keyword)} title="Bỏ tự quét"> ✕</a></span>`).join("")}</div>` : ""}`;
+    ${kws.length ? `<div class="chips">${kws.map(k => `<span class="chip">${esc(mk.sources[k.platform] || k.platform)}: ${esc(k.keyword || "tất cả")}${k.country ? " · " + esc(k.country) : ""}
+      <a ${act("removeViralKw", k.platform, k.keyword, k.country)} title="Bỏ tự quét"> ✕</a></span>`).join("")}</div>` : ""}`;
   const labelChips = `<div class="chips">${Object.entries(VLABEL).map(([k, [n, c]]) =>
     `<span class="chip ${c}" ${act("viralFilter", "label", viralFilters.label === k ? "" : k)} style="${viralFilters.label === k ? "outline:2px solid currentColor" : ""}">${n} (${counts[k] || 0})</span>`).join("")}</div>`;
   const bar = `<div class="filters">
     <select data-change="viralPlatform">${opt(PLATFORM, viralFilters.platform, "Mọi nền tảng")}</select>
+    <select data-change="viralMarket"><option value="">Mọi thị trường</option>${Object.entries(res.markets || {}).map(([m, n]) =>
+      `<option value="${m}" ${m === viralFilters.market ? "selected" : ""}>${m} (${n})</option>`).join("")}</select>
     <select data-change="product_type"><option value="">Mọi loại sản phẩm</option>${fopt(facets.product_types, filters.product_type)}</select>
     <select data-change="niche"><option value="">Mọi niche</option>${fopt(facets.niches, filters.niche)}</select>
     <label><input type="checkbox" ${filters.pod ? "checked" : ""} data-change="pod"> Chỉ POD</label>
@@ -283,7 +340,8 @@ async function renderViral() {
       `<option value="${k}" ${k === viralFilters.sort ? "selected" : ""}>${n}</option>`).join("")}</select>
     ${layoutToggle()}
   </div>`;
-  const list = items.length ? wrapItems(items, socialRow, socialCard) + pager(total)
+  pageItems = {cids: [], vids: items.map(v => v.vid)};
+  const list = items.length ? mediaBar(items.length) + wrapItems(items, socialRow, socialCard) + pager(total)
     : `<div class="list"><div class="empty">Chưa có video viral nào. Nhập từ khoá ở trên rồi bấm Quét.</div></div>`;
   return form + labelChips + bar + list;
 }
@@ -311,8 +369,10 @@ async function openSocial(vid) {
       <span class="note"> · ${v.author ? "@" + esc(v.author) + " · " : ""}quét ${ago(v.last_seen)}</span></div>
     <div class="btns">
       <a class="btn primary" target="_blank" rel="noopener" href="${esc(v.url)}">▶ Mở video</a>
-      ${v.video_url ? `<a class="btn" target="_blank" rel="noopener" href="${esc(v.video_url)}">Tải file video</a>` : `<span></span>`}
+      ${v.video_url ? `<button ${act("downloadMedia", "social", v.vid, "video")}>⬇ Tải video</button>` : `<span></span>`}
+      <button ${act("downloadMedia", "social", v.vid, "image")}>🖼 Tải ảnh bìa</button>
     </div>
+    ${v.market ? `<div class="kv"><span>Thị trường</span><b>🌍 ${esc(v.market)}</b></div>` : ""}
     <h3>Số liệu</h3>
     ${v.platform === "tiktok_ads" ? kv("Lượt thích", num(v.likes)) + (ex.ctr != null ? kv("CTR", esc(ex.ctr)) : "")
         + (ex.cost != null ? kv("Mức ngân sách", esc(ex.cost)) : "") + (ex.brand_name ? kv("Thương hiệu", esc(ex.brand_name)) : "")
@@ -429,7 +489,9 @@ async function openLogin(site) {
   catch (e) { alert(e.message); }
 }
 
-async function removeViralKw(platform, keyword) { await del(`/api/viral/keywords/${platform}/${enc(keyword || " ")}`); render(); }
+async function removeViralKw(platform, keyword, country) {
+  await del(`/api/viral/keywords/${platform}/${enc(keyword || " ")}${country ? "?country=" + enc(country) : ""}`); render();
+}
 
 async function renderOverview() {
   const [s, auto, niches, vir, info] = await Promise.all([refreshCounts(), api("/api/autoscan"), api("/api/niches"),
@@ -570,6 +632,35 @@ async function renderKeywords() {
       : `<div class="empty">Chưa có từ khoá nào.</div>`}`;
 }
 
+let trendMarket = "";
+function spark(points) {
+  const vals = (points || []).map(p => +p[1]).filter(x => !Number.isNaN(x));
+  if (vals.length < 2) return "";
+  const mx = Math.max(...vals), mn = Math.min(...vals), w = 90, h = 24;
+  const pts = vals.map((v, i) => `${(i * w / (vals.length - 1)).toFixed(1)},${(h - 2 - (h - 4) * (mx === mn ? 0.5 : (v - mn) / (mx - mn))).toFixed(1)}`).join(" ");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline fill="none" stroke="var(--brand)" stroke-width="1.6" points="${pts}"/></svg>`;
+}
+
+async function renderTrends() {
+  const [mk, r] = await Promise.all([getMarkets(), api("/api/trends" + (trendMarket ? "?market=" + enc(trendMarket) : ""))]);
+  const form = `<form class="card" id="trendForm" style="margin-bottom:12px"><b>Quét hashtag xu hướng</b>
+      <span class="note">— TikTok Creative Center, đúng thị trường bạn chọn (mỗi thị trường = 1 lượt quét TikTok)</span>
+      <div class="chips markets" style="margin:8px 0">${Object.entries(mk.markets).map(([c, n]) =>
+        `<label class="chip"><input type="checkbox" name="countries" value="${c}" ${c === "US" ? "checked" : ""}> ${c} · ${esc(n)}</label>`).join("")}</div>
+      <div class="toolbar" style="margin:0"><select name="period"><option value="7">7 ngày</option><option value="30">30 ngày</option><option value="120">120 ngày</option></select>
+        <label class="note"><input type="checkbox" name="save" checked> Tự quét mỗi đêm</label><button class="primary small">Quét hashtag</button></div></form>`;
+  const tabs = `<div class="toolbar"><span class="seg">${["", ...r.markets].map(m =>
+    `<button class="small ${trendMarket === m ? "on" : ""}" ${act("trendMarket", m)}>${m ? `${m} · ${esc(r.names[m] || m)}` : "Mọi thị trường"}</button>`).join("")}</span></div>`;
+  if (!r.items.length) return form + tabs + `<div class="list"><div class="empty">Chưa có hashtag nào. Chọn thị trường ở trên rồi bấm Quét hashtag.</div></div>`;
+  const move = x => x == null ? `<span class="chip g">mới</span>` : x > 0 ? `<b class="green">▲${x}</b>` : x < 0 ? `<b class="red">▼${-x}</b>` : "–";
+  return form + tabs + `<p class="note">Hashtag khớp từ khoá bạn đang theo dõi được tô xanh. Bấm "Quét video" để tìm video TikTok của hashtag đó.</p>
+    <div class="list"><table><tr><th class="num">Hạng</th><th></th><th>Hashtag</th><th>Thị trường</th><th class="num">Bài đăng</th><th class="num">Lượt xem</th><th>7 ngày</th><th></th></tr>
+    ${r.items.map(t => `<tr ${t.match.length ? 'style="background:var(--brand-soft)"' : ""}><td class="num"><b>${t.rank ?? "?"}</b></td><td>${move(t.move)}</td>
+      <td><b>#${esc(t.name)}</b>${t.match.map(m => ` <span class="chip g">${esc(m)}</span>`).join("")}</td><td>${esc(t.market)}</td>
+      <td class="num">${num(t.posts)}</td><td class="num">${num(t.views)}</td><td>${spark(t.trend)}</td>
+      <td><button class="small" ${act("scanTag", t.name, false)}>Quét video</button> <button class="small" ${act("scanTag", t.name, true)}>+ Theo dõi</button></td></tr>`).join("")}</table></div>`;
+}
+
 let storeFilter = "pending";
 async function renderStores() {
   const r = await api(`/api/stores?status=${storeFilter}&offset=${pageOffset}&limit=50`);
@@ -639,7 +730,7 @@ async function renderShops() {
       <td class="num ${r.hot ? "green" : ""}">${r.hot}</td><td>${fmtDate(r.first_ts)}</td><td>${fmtDate(r.last_ts)}</td></tr>`).join("")}</table></div>`;
 }
 
-const VIEWS = {stores: renderStores, history: renderHistory, data: renderData,
+const VIEWS = {trends: renderTrends, stores: renderStores, history: renderHistory, data: renderData,
   potential: () => renderList(null, {tab: "potential"}), cow: () => renderList(null, {tab: "cow"}), test: () => renderList(null, {tab: "test"}),
   hidden: () => renderList(null, {tab: "hidden"}), dig: () => renderList(null, {tab: "dig"}), notify: renderNotify, safety: renderSafety, viral: renderViral, spread: () => renderList(null, {spread: "true"}), overview: renderOverview, scan: renderScan, niches: renderNiches, follows: renderFollows,
   keywords: renderKeywords, shops: renderShops};
@@ -684,8 +775,11 @@ function bindForms() {
     await post("/api/scan", {keyword: d.keyword, country: d.country, max_ads: 300, save: true}); pollJobs(); render();
   });
   on("#viralForm", async (d, f) => {
-    await post("/api/viral/scan", {platform: d.platform, keyword: d.keyword, country: d.country, period: +d.period, save: !!d.save});
-    f.keyword.value = ""; pollJobs(); render();
+    const keywords = d.keywords.split(/[,\n]/).map(x => x.trim()).filter(Boolean);
+    const countries = new FormData(f).getAll("countries");
+    if (!countries.length) return alert("Chọn ít nhất 1 thị trường");
+    const r = await post("/api/viral/scan", {platform: d.platform, keywords, countries, period: +d.period, save: !!d.save});
+    f.keywords.value = ""; pollJobs(); alert(`Đã xếp ${r.queued} lượt quét.`); render();
   });
   document.querySelectorAll(".limitsForm").forEach(f => f.onsubmit = async e => {
     e.preventDefault();
@@ -699,6 +793,12 @@ function bindForms() {
   on("#eventsForm", async d => {
     const events = Object.fromEntries(Object.keys(EVENT_NAMES).map(k => [k, !!d[k]]));
     await post("/api/notify", {events, desktop: !!d.desktop}); alert("Đã lưu"); render();
+  });
+  on("#trendForm", async (d, f) => {
+    const countries = new FormData(f).getAll("countries");
+    if (!countries.length) return alert("Chọn ít nhất 1 thị trường");
+    const r = await post("/api/viral/scan", {platform: "tiktok_tags", countries, period: +d.period, save: !!d.save});
+    pollJobs(); alert(`Đã xếp ${r.queued} lượt quét hashtag.`);
   });
   on("#autoForm", async d => { await post("/api/autoscan", {enabled: !!d.enabled, hour: +d.hour, stores: +d.stores}); render(); });
   on("#batchForm", async (d, f) => {
@@ -762,9 +862,12 @@ ${tabChips(v)}${digChip}
       ${v.main_link ? `<a class="btn" target="_blank" rel="noopener" href="${esc(v.main_link)}">Mở URL bán ↗</a>` : `<span class="btn">Không có URL bán</span>`}
       <a class="btn" target="_blank" rel="noopener" href="${esc(v.ad_library_url)}">Xem trên Thư viện QC</a>
       <button ${act("dig", v.cid)}>⤓ Đào sâu</button>
+      <button ${act("downloadMedia", "video", v.cid, "video")} ${v.video_url ? "" : "disabled"}>⬇ Tải video</button>
+      <button ${act("downloadMedia", "video", v.cid, "image")}>🖼 Tải ảnh</button>
       <button ${act("mark", v.cid, "test", !isTest)}>${isTest ? "✓ Đang test" : "+ Video test"}</button>
       <button ${act("mark", v.cid, "hidden", !isHidden)}>${isHidden ? "Bỏ ẩn" : "🙈 Ẩn video"}</button>
     </div>
+    ${mediaNote(v.media)}
     <h3>Sức sống quảng cáo (đang chạy)</h3>
     <div class="boxes">
       <div class="box"><b class="green">${b.win}</b><small>Win · 7–14 ngày</small></div>
@@ -796,11 +899,21 @@ ${tabChips(v)}${digChip}
     <h3>Theo dõi page (${v.page_list.length})</h3>
     <div>${v.page_list.map(p => followBtn("page", p.id, p.name, p.followed)).join("") || "—"}</div>
     <h3>Các quảng cáo (${v.ads.length})</h3>
-    <table><tr><th>Page</th><th>Bắt đầu</th><th>Trạng thái</th></tr>${v.ads.slice(0, 100).map(a =>
+    <table><tr><th>Page</th><th>Bắt đầu</th><th>Trạng thái</th><th>Tải</th></tr>${v.ads.slice(0, 100).map(a =>
       `<tr><td><a target="_blank" rel="noopener" href="https://www.facebook.com/ads/library/?id=${esc(a.ad_id)}">${esc(a.page_name || a.page_id)}</a>
        ${a.collation_count > 1 ? `<small class="note">×${a.collation_count}</small>` : ""}</td>
-       <td>${fmtDate(a.start_ts)}</td><td>${a.is_active ? '<span class="green">đang chạy</span>' : "đã tắt"}</td></tr>`).join("")}</table>`;
+       <td>${fmtDate(a.start_ts)}</td><td>${a.is_active ? '<span class="green">đang chạy</span>' : "đã tắt"}</td>
+       <td>${a.video_url ? `<a ${act("downloadMedia", "ad", a.ad_id, "video")} title="Tải video của QC này">⬇</a>` : ""}
+         ${a.thumb_url ? `<a ${act("downloadMedia", "ad", a.ad_id, "image")} title="Tải ảnh của QC này">🖼</a>` : ""}</td></tr>`).join("")}</table>`;
   $("#drawer").classList.remove("hidden");
+}
+
+function mediaNote(m) {
+  if (!m || !m.video_url) return `<p class="note">QC này không có link video (QC ảnh) — vẫn tải được ảnh.</p>`;
+  const extra = m.variants > 1 ? ` · ${m.variants} bản video khác nhau từ các shop (tải từng bản ở bảng Các quảng cáo bên dưới)` : "";
+  if (m.video_expired) return `<p class="note red">Link video đã hết hạn lúc ${fmtTime(m.video_expires_ts)} — bấm Đào sâu hoặc quét lại để lấy link mới${extra}.</p>`;
+  return m.video_expires_ts ? `<p class="note">Link video còn hạn tới ${fmtTime(m.video_expires_ts)} (Facebook đổi link định kỳ)${extra}.</p>`
+    : extra ? `<p class="note">${extra.slice(3)}.</p>` : "";
 }
 
 function closeDrawer() { openCid = openVid = null; $("#drawer").classList.add("hidden");
@@ -844,6 +957,7 @@ const CHANGES = {product_type: el => filterBy("product_type", el.value), niche: 
   pod: el => filterBy("pod", el.checked),
   viralPlatform: el => { viralFilters.platform = el.value; pageOffset = 0; render(); },
   viralSort: el => { viralFilters.sort = el.value; pageOffset = 0; render(); },
+  viralMarket: el => { viralFilters.market = el.value; pageOffset = 0; render(); },
   passive: el => post("/api/passive", {enabled: el.checked})};
 document.addEventListener("change", e => {
   const el = e.target.closest("[data-change]");
@@ -885,7 +999,13 @@ async function importData() {
   } catch (e) { alert(e.message); }
 }
 
+async function scanTag(name, save) {
+  const r = await post("/api/viral/scan", {platform: "tiktok", keywords: ["#" + name], save});
+  pollJobs(); alert(r.queued ? `Đã xếp quét video #${name}${save ? " (tự quét mỗi đêm)" : ""}.` : "Hashtag này đang chờ quét.");
+}
+
 const ACTIONS = {findChat, downloadDiag, loadDemo, setView, closeDrawer, runAll, clearScope: () => clearScope(),
+  downloadMedia, batchMedia, scanTag, trendMarket: m => { trendMarket = m; render(); },
   mark, digBatch, sweepStores, sweepOne, exportData, importData,
   storeFilter: k => { storeFilter = k; pageOffset = 0; render(); },
   addKw: k => { const ta = $("#batchForm [name=keywords]"); ta.value = (ta.value.trim() ? ta.value.trim() + "\n" : "") + k; }, testNotify, clearToken, resumePlatform, openLogin, goSafety: () => setView("safety"), openSocial, removeViralKw, viralFilter: (k, val) => { viralFilters[k] = val; pageOffset = 0; render(); }, setLayout, goPage,

@@ -266,7 +266,7 @@ export function summarize(cid, ads, landings, t = null) {
     ads: [...ads].sort((x, y) => (x.start_ts || 0) - (y.start_ts || 0)).map(a => ({
       ad_id: a.ad_id, page_id: a.page_id ?? null, page_name: a.page_name ?? null, domain: a.domain ?? null,
       link_url: a.link_url ?? null, start_ts: a.start_ts ?? null, end_ts: a.end_ts ?? null, is_active: a.is_active ?? null,
-      collation_count: a.collation_count ?? null})),
+      collation_count: a.collation_count ?? null, video_url: a.video_url ?? null, thumb_url: a.thumb_url ?? null})),
     keywords: sortedStr(new Set(ads.filter(a => a.keyword).map(a => a.keyword))),
     last_seen: Math.max(...ads.map(a => a.last_seen || 0)),
   };

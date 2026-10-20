@@ -12,6 +12,7 @@ import * as scanner from "./scanner.js";
 import * as social from "./social.js";
 import * as demo from "./demo.js";
 import {fetchImage} from "./imagehash.js";
+import * as media from "./media.js";
 import {parseJsonText} from "./fbparser.js";
 
 const LOG = [];
@@ -221,16 +222,23 @@ const JOBS = {
     return ads.length;
   },
 
-  // Quét video viral 1 nền tảng theo từ khoá (Top Ads: từ khoá có thể bỏ trống).
+  // Quét video viral 1 nguồn theo từ khoá / hashtag (Top Ads, thịnh hành, hashtag xu hướng: từ khoá có thể bỏ trống).
+  // Nguồn Creative Center quét đúng thị trường `country`; TikTok tìm kiếm / Reels theo tài khoản + IP của bạn.
   async social({platform, keyword, country, max_items, period = 7}) {
     await demo.clearIfDemo(log);
-    const name = social.PLATFORMS[platform];
-    log(`Quét ${name} '${keyword || "tất cả"}' (${country})`);
+    const name = social.SOURCES[platform];
+    const byMarket = social.MARKET_SOURCES.has(platform);
+    log(`Quét ${name} '${keyword || "tất cả"}'` + (byMarket ? ` (${country})` : ""));
     await safety.beforeScan(safety.platformOf(platform), log, shouldStop);
     const items = await scanner.scanSocial(platform, keyword, country, max_items, period, log, shouldStop);
+    await db.touchSocialWatch(platform, keyword, byMarket ? country : "");
+    if (platform === "tiktok_tags") {
+      await db.upsertTrends(country, items);
+      log(`Đọc được ${items.length} hashtag xu hướng (${country})`);
+      return items.length;
+    }
     log(`Đọc được ${items.length} video ${name}`);
-    await db.upsertSocial(items, keyword || null);
-    await db.touchSocialWatch(platform, keyword);
+    await db.upsertSocial(items, keyword || null, null, 0, byMarket ? country : null);
     await fetchSocialCovers();
     await notifySocial(platform, new Set(items.map(it => it.vid)));
     return items.length;
@@ -269,6 +277,23 @@ const JOBS = {
   },
 
   async recompute() { await recompute(); return 0; },
+
+  // Tải hàng loạt ảnh / video (Chrome tự lưu vào Tải về/SnakemediaPOD/<ngày>/)
+  async media({targets, kind}) {
+    const kinds = kind === "both" ? ["video", "image"] : [kind];
+    let ok = 0, fail = 0;
+    for (const [k, key] of targets) {
+      if (state.stop) break;
+      const t = await mediaTarget(k, key);
+      if (!t) continue;
+      for (const type of kinds) {
+        try { await media.download({url: type === "video" ? t.video : t.image, local: t.local, kind: type, name: t.name}); ok++; }
+        catch (e) { fail++; log(`  bỏ qua ${t.name} (${type}): ${e.message}`); }
+      }
+    }
+    log(`Đã gửi ${ok} file cho Chrome tải về thư mục Tải về/SnakemediaPOD` + (fail ? `, ${fail} file lỗi` : ""));
+    return ok;
+  },
 
   // Tự lưu khi lướt: xử lý các QC / video bạn vừa tự xem trên Facebook / TikTok
   async passive() {
@@ -334,7 +359,7 @@ export async function queueAllWatched(reason) {
   for (const f of await db.listFollows())
     n += submit("follow", `Theo dõi ${f.kind} ${f.name || f.key}`, {kind: f.kind, key: f.key, country});
   for (const w of await db.listSocialWatch())
-    n += submit("social", `Viral ${w.platform} '${w.keyword}'`,
+    n += submit("social", socialTitle(w.platform, w.keyword, w.country || country),
       {platform: w.platform, keyword: w.keyword, country: w.country || country, max_items: C.DEFAULT_MAX_ADS});
   const nStores = +(await autoSettings()).stores;
   n += queueSweeps((await storeRows()).filter(r => r.status === "pending").slice(0, nStores).map(r => r.domain), country);
@@ -446,4 +471,29 @@ export async function keywordSuggestions(limit = 30) {
   }
   return [...count.keys()].sort((a, b) => (count.get(b) - count.get(a)) || (a < b ? -1 : a > b ? 1 : 0)).slice(0, limit)
     .map(k => ({keyword: k, videos: count.get(k), source: source.get(k)}));
+}
+
+
+export function socialTitle(platform, keyword, country) {
+  return `Viral ${platform} '${keyword}'` + (social.MARKET_SOURCES.has(platform) ? ` ${country}` : "");
+}
+
+// {video, image, local, name} của 1 QC (ad) / 1 video QC (video) / 1 video viral (social). Không có -> null.
+export async function mediaTarget(kind, key) {
+  if (kind === "ad") {
+    const a = (await db.allAds()).find(x => x.ad_id === key);
+    if (!a) return null;
+    const local = (await db.thumbData([a.thumb_path]))[a.thumb_path] || null;
+    return {video: a.video_url, image: a.thumb_url, local, name: `qc-${key}-${media.slug(a.body || a.title)}`};
+  }
+  if (kind === "video") {
+    const v = await db.getVideo(key);
+    if (!v) return null;
+    const local = (await db.thumbData([v.thumb]))[v.thumb] || null;
+    return {video: v.video_url, image: v.thumb_url, local, name: `${v.label}-${media.slug(v.title)}-${key}`};
+  }
+  const r = await db.socialRow(key);
+  if (!r) return null;
+  const local = (await db.thumbData([r.cover_path]))[r.cover_path] || null;
+  return {video: r.video_url, image: r.cover_url, local, name: `${r.platform}-${media.slug(r.caption)}-${r.item_id}`};
 }

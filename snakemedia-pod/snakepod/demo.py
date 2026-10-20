@@ -67,6 +67,28 @@ SOCIAL = [
 ]
 
 
+TRENDS = {  # thị trường -> [(hashtag, lượt xem, số bài)]
+    "US": [("dogmom", 98_000_000, 41_000), ("nursesoftiktok", 76_000_000, 28_000), ("halloweendecor", 64_000_000, 19_500),
+           ("customgifts", 31_000_000, 9_800), ("grandmagifts", 12_000_000, 3_100)],
+    "GB": [("dogmum", 21_000_000, 7_300), ("christmasjumper", 18_000_000, 6_200), ("customgifts", 9_000_000, 2_400)],
+}
+
+
+def _demo_trends(now):
+    for market, tags in TRENDS.items():
+        old = [{"name": n, "rank": i + 2 if i % 2 else i + 1} for i, (n, _, _) in enumerate(tags)]
+        db.upsert_trends(market, old, now=now - DAY)
+        db.upsert_trends(market, [{"name": n, "rank": i + 1, "views": v, "posts": p,
+                                   "trend": [[now - (6 - d) * DAY, round(0.3 + 0.1 * d + 0.05 * i, 2)] for d in range(7)]}
+                                  for i, (n, v, p) in enumerate(tags)], now=now)
+    db.upsert_social([{"vid": "tiktok_trend:7401", "platform": "tiktok_trend", "item_id": "7401",
+                       "url": "https://www.tiktok.com/", "author": None, "caption": "Dog mum hoodie reveal 🐾 #dogmum",
+                       "cover_url": None, "video_url": None, "views": None, "likes": None, "comments": None, "shares": None,
+                       "saves": None, "created_ts": None, "duration": 18, "extra": None}], "demo", now=now, market="GB")
+    (config.THUMB_DIR / "s_demo_7401.jpg").write_bytes(_img(150))
+    db.set_social_cover("tiktok_trend:7401", "s_demo_7401.jpg")
+
+
 def _demo_social(now):
     for i, (plat, item_id, cap, author, age_h, views, likes, comments, shares, extra) in enumerate(SOCIAL):
         img = _img(100 + i)
@@ -81,8 +103,10 @@ def _demo_social(now):
         for k, v in enumerate(views):
             db.upsert_social([{**base, "views": v}], "demo", now=now - (len(views) - 1 - k) * 6 * 3600)
         db.set_social_cover(base["vid"], name)
-    db.add_social_watch("tiktok", "dog mom shirt", "US")
+    db.add_social_watch("tiktok", "dog mom shirt", "")
     db.add_social_watch("tiktok_ads", "", "US")
+    db.add_social_watch("tiktok_tags", "", "US")
+    _demo_trends(now)
 
 
 def _demo_history(videos, now):

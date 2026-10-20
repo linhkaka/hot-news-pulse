@@ -16,9 +16,14 @@ import time
 from . import config, pod
 from .fb_parser import _loads_many
 
-PLATFORMS = {"tiktok": "TikTok", "tiktok_ads": "TikTok Top Ads", "fb_reels": "Facebook Reels"}
+PLATFORMS = {"tiktok": "TikTok", "tiktok_ads": "TikTok Top Ads", "tiktok_trend": "TikTok thịnh hành",
+             "fb_reels": "Facebook Reels"}
+# Nguồn quét: các nền tảng video ở trên + bảng hashtag xu hướng (không phải video)
+SOURCES = {**PLATFORMS, "tiktok_tags": "TikTok hashtag xu hướng"}
+# Nguồn chọn được thị trường (Creative Center). TikTok tìm kiếm / Reels: theo tài khoản + IP của bạn.
+MARKET_SOURCES = {"tiktok_ads", "tiktok_trend", "tiktok_tags"}
 LABELS = {"dang_no": "Đang nổ", "viral": "Viral", "dang_len": "Đang lên", "binh_thuong": "Bình thường",
-          "top_ads": "Top Ads"}
+          "top_ads": "Top Ads", "xu_huong": "Thịnh hành"}
 HOUR = 3600
 # Thẻ <script ... type="application/json" ...> với thuộc tính theo bất kỳ thứ tự nào (TikTok đặt id trước type)
 _SCRIPT_RE = re.compile(r'<script\b[^>]*\btype="application/json"[^>]*>(.*?)</script>', re.S)
@@ -183,6 +188,87 @@ def parse_topads_text(text):
     return list(out.values())
 
 
+# ---------------- TikTok Creative Center: video thịnh hành + hashtag xu hướng theo thị trường ----------------
+
+def trend_video_item(d):
+    """Video trong bảng "video thịnh hành" của Creative Center (không có số lượt xem)."""
+    item_id = d.get("item_id") or d.get("id")
+    url = d.get("item_url") if isinstance(d.get("item_url"), str) else None
+    if not item_id or d.get("ad_title") or isinstance(d.get("stats"), dict) or not (url or d.get("item_id") and d.get("cover")):
+        return None
+    if url and "tiktok.com" not in url:
+        return None
+    item_id = str(item_id)
+    market = d.get("country_code") if isinstance(d.get("country_code"), str) else None
+    extra = {k: d[k] for k in ("region",) if isinstance(d.get(k), str)}
+    return {
+        "vid": f"tiktok_trend:{item_id}",
+        "platform": "tiktok_trend",
+        "item_id": item_id,
+        "url": url or f"https://www.tiktok.com/@_/video/{item_id}",
+        "author": None,
+        "caption": _text(d.get("title")),
+        "cover_url": d.get("cover") if isinstance(d.get("cover"), str) else None,
+        "video_url": None,
+        "views": None, "likes": None, "comments": None, "shares": None, "saves": None,
+        "created_ts": None,
+        "duration": _int(d.get("duration")),
+        "extra": json.dumps(extra, ensure_ascii=False) if extra else None,
+        "market": market.upper() if market else None,
+    }
+
+
+def parse_trend_videos_text(text):
+    out = {}
+    for blob in _blobs(text):
+        for d in _walk(blob):
+            it = trend_video_item(d)
+            if it:
+                out[it["vid"]] = it
+    return list(out.values())
+
+
+def parse_trend_videos_html(html):
+    out = {}
+    for blob in _html_blobs(html):
+        for d in _walk(blob):
+            it = trend_video_item(d)
+            if it:
+                out[it["vid"]] = it
+    return list(out.values())
+
+
+def hashtag_item(d):
+    name = d.get("hashtag_name")
+    if not isinstance(name, str) or not name.strip():
+        return None
+    trend = [[_int(p.get("time")), p.get("value")] for p in (d.get("trend") or []) if isinstance(p, dict)]
+    ci = d.get("country_info") if isinstance(d.get("country_info"), dict) else {}
+    return {"name": name.strip().lstrip("#").lower(), "rank": _int(d.get("rank")), "rank_diff": _int(d.get("rank_diff")),
+            "views": _int(d.get("video_views")), "posts": _int(d.get("publish_cnt")), "trend": trend,
+            "market": ci.get("id") if isinstance(ci.get("id"), str) else None}
+
+
+def parse_hashtags_text(text):
+    out = {}
+    for blob in _blobs(text):
+        for d in _walk(blob):
+            it = hashtag_item(d)
+            if it:
+                out[it["name"]] = it
+    return list(out.values())
+
+
+def parse_hashtags_html(html):
+    out = {}
+    for blob in _html_blobs(html):
+        for d in _walk(blob):
+            it = hashtag_item(d)
+            if it:
+                out[it["name"]] = it
+    return list(out.values())
+
+
 # ---------------- Facebook Reels (THỬ NGHIỆM) ----------------
 
 def reel_item(d):
@@ -278,7 +364,12 @@ def summarize(row, snapshots, now=None):
                       for s in snapshots[-30:]]
 
     checks = []
-    if row["platform"] == "tiktok_ads":
+    if row["platform"] == "tiktok_trend":
+        label = "xu_huong"
+        where = f" · thị trường {row['market']}" if row.get("market") else ""
+        checks.append({"ok": True, "text": f"Nằm trong video thịnh hành của TikTok Creative Center{where}"})
+        checks.append({"ok": None, "text": "Creative Center không công bố lượt xem của video thịnh hành"})
+    elif row["platform"] == "tiktok_ads":
         label = "top_ads"
         ex = v["extra"]
         checks.append({"ok": True, "text": "Nằm trong Top Ads của TikTok Creative Center"})

@@ -6,7 +6,7 @@ import {dhashBitmap, smallJpeg} from "./imagehash.js";
 
 const DAY = 86400;
 const DATA_STORES = ["ads", "landings", "videos", "follows", "watch_keywords", "social_videos", "social_snapshots",
-  "social_watch", "notified", "scans", "thumbs", "rate_events", "diag", "video_history", "marks", "digs", "stores"];
+  "social_watch", "notified", "scans", "thumbs", "rate_events", "diag", "video_history", "marks", "digs", "stores", "trends"];
 
 const PRODUCTS = [
   // [nội dung, giá, ngày tuổi video, ngày tuổi trang bán, [[shop, số page, [tuổi QC đang chạy]]], số QC đã tắt]
@@ -44,6 +44,12 @@ const SOCIAL = [
   ["fb_reels", "r501", "Memorial canvas made her cry 😭 personalized in loving memory", "Forever Prints",
     40, [350000, 520000], 18000, 2400, 6100, null],
 ];
+
+const TRENDS = {  // thị trường -> [[hashtag, lượt xem, số bài]]
+  US: [["dogmom", 98000000, 41000], ["nursesoftiktok", 76000000, 28000], ["halloweendecor", 64000000, 19500],
+    ["customgifts", 31000000, 9800], ["grandmagifts", 12000000, 3100]],
+  GB: [["dogmum", 21000000, 7300], ["christmasjumper", 18000000, 6200], ["customgifts", 9000000, 2400]],
+};
 
 function rng(seed) {   // mulberry32
   return () => {
@@ -146,8 +152,21 @@ export async function load() {
       await db.upsertSocial([{...base, views: views[k]}], "demo", now - (views.length - 1 - k) * 6 * 3600);
     await db.setSocialCover(base.vid, name);
   }
-  await db.addSocialWatch("tiktok", "dog mom shirt", "US");
+  await db.addSocialWatch("tiktok", "dog mom shirt", "");
   await db.addSocialWatch("tiktok_ads", "", "US");
+  await db.addSocialWatch("tiktok_tags", "", "US");
+  // Hashtag xu hướng theo thị trường (hôm qua -> hôm nay để thấy tăng/giảm hạng) + 1 video thịnh hành ở Anh
+  for (const [market, tags] of Object.entries(TRENDS)) {
+    await db.upsertTrends(market, tags.map(([name], i) => ({name, rank: i % 2 ? i + 2 : i + 1})), now - DAY);
+    await db.upsertTrends(market, tags.map(([name, views, posts], i) => ({name, rank: i + 1, views, posts,
+      trend: Array.from({length: 7}, (_, d) => [now - (6 - d) * DAY, Math.round((0.3 + 0.1 * d + 0.05 * i) * 100) / 100])})), now);
+  }
+  const [, jpg] = await image(150);
+  await db.saveThumb("s_demo_7401.jpg", jpg);
+  await db.upsertSocial([{vid: "tiktok_trend:7401", platform: "tiktok_trend", item_id: "7401", url: "https://www.tiktok.com/",
+    author: null, caption: "Dog mum hoodie reveal 🐾 #dogmum", cover_url: null, video_url: null, views: null, likes: null,
+    comments: null, shares: null, saves: null, created_ts: null, duration: 18, extra: null}], "demo", now, 0, "GB");
+  await db.setSocialCover("tiktok_trend:7401", "s_demo_7401.jpg");
   await db.addWatchKeyword("dog mom shirt", "US");
   await db.addWatchKeyword("personalized ornament", "US");
   await db.addFollow("shop", "bloomyard.com", "bloomyard.com");

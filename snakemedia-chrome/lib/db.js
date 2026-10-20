@@ -2,7 +2,7 @@
 // Dữ liệu nằm trong hồ sơ Chrome của bạn; gỡ tiện ích là mất dữ liệu.
 
 const NAME = "snakepod";
-const VERSION = 2;   // 2: lịch sử theo dõi, Video test / Đã ẩn, đã đào, quét store win
+const VERSION = 3;   // 2: lịch sử theo dõi, Video test / Đã ẩn, đã đào, quét store win; 3: thị trường, hashtag xu hướng
 let _db = null;
 
 const STORES = {
@@ -14,7 +14,7 @@ const STORES = {
   settings: {keyPath: "key"},
   social_videos: {keyPath: "vid", indexes: ["platform"]},
   social_snapshots: {autoIncrement: true, keyPath: "id", indexes: ["vid"]},
-  social_watch: {keyPath: ["platform", "keyword"]},
+  social_watch: {keyPath: ["platform", "keyword", "country"]},   // cùng từ khoá theo dõi được ở nhiều thị trường
   rate_events: {autoIncrement: true, keyPath: "id", indexes: ["platform"]},
   notified: {keyPath: ["kind", "key"]},
   scans: {autoIncrement: true, keyPath: "id"},
@@ -24,6 +24,7 @@ const STORES = {
   marks: {keyPath: ["cid", "kind"], indexes: ["cid"]},
   digs: {keyPath: "cid"},
   stores: {keyPath: "domain"},
+  trends: {keyPath: ["market", "name"], indexes: ["market"]},   // hashtag xu hướng theo thị trường
 };
 
 export const now = () => Math.floor(Date.now() / 1000);
@@ -32,8 +33,17 @@ export function open() {
   if (_db) return Promise.resolve(_db);
   return new Promise((resolve, reject) => {
     const r = indexedDB.open(NAME, VERSION);
-    r.onupgradeneeded = () => {
+    r.onupgradeneeded = e => {
       const db = r.result;
+      // Bản 1-2: từ khoá viral khoá theo (nền tảng, từ khoá) -> thêm thị trường vào khoá, giữ nguyên dữ liệu
+      if (e.oldVersion > 0 && e.oldVersion < 3 && db.objectStoreNames.contains("social_watch")) {
+        const old = r.transaction.objectStore("social_watch").getAll();
+        old.onsuccess = () => {
+          db.deleteObjectStore("social_watch");
+          const st = db.createObjectStore("social_watch", {keyPath: STORES.social_watch.keyPath});
+          for (const w of old.result) st.put({...w, country: w.country ?? ""});
+        };
+      }
       for (const [name, s] of Object.entries(STORES)) {
         if (db.objectStoreNames.contains(name)) continue;
         const st = db.createObjectStore(name, {keyPath: s.keyPath, autoIncrement: !!s.autoIncrement});
@@ -249,19 +259,21 @@ export async function shopRows() {
 const SOCIAL_FIELDS = ["vid", "platform", "item_id", "url", "author", "caption", "cover_url", "video_url", "views", "likes",
   "comments", "shares", "saves", "created_ts", "duration", "extra"];
 
-export async function upsertSocial(items, keyword = null, t = null, minGapS = 0) {
+export async function upsertSocial(items, keyword = null, t = null, minGapS = 0, market = null) {
   // Lưu video + 1 bản chụp số liệu (để tính tốc độ tăng thật giữa các lần quét).
   // minGapS > 0: bỏ qua bản chụp nếu video vừa được chụp trong minGapS giây (tự lưu khi lướt chụp liên tục).
   t = t || now();
   await tx(["social_videos", "social_snapshots"], "readwrite", async s => {
     for (const it of items) {
       const old = await req(s.social_videos.get(it.vid));
+      const mk = it.market || market || null;
       if (!old) {
-        const row = {cover_path: null, keyword, first_seen: t, last_seen: t};
+        const row = {cover_path: null, keyword, first_seen: t, last_seen: t, market: mk};
         for (const f of SOCIAL_FIELDS) row[f] = it[f] ?? null;
         s.social_videos.put(row);
       } else {
-        const upd = {...old, last_seen: t, created_ts: coalesce(old.created_ts, it.created_ts), keyword: coalesce(old.keyword, keyword)};
+        const upd = {...old, last_seen: t, created_ts: coalesce(old.created_ts, it.created_ts), keyword: coalesce(old.keyword, keyword),
+          market: coalesce(mk, old.market)};
         for (const f of ["url", "caption", "cover_url", "video_url", "views", "likes", "comments", "shares", "saves", "extra"])
           upd[f] = coalesce(it[f], old[f]);
         s.social_videos.put(upd);
@@ -303,17 +315,44 @@ export async function setSocialCover(vid, path) {
 }
 
 export async function addSocialWatch(platform, keyword, country) {
-  if (await get("social_watch", [platform, keyword])) return;
+  if (await get("social_watch", [platform, keyword, country])) return;
   await put("social_watch", {platform, keyword, country, added_ts: now(), last_scan_ts: null});
 }
-export const removeSocialWatch = (platform, keyword) => del("social_watch", [platform, keyword]);
+// country = null: bỏ theo dõi ở mọi thị trường
+export async function removeSocialWatch(platform, keyword, country = null) {
+  for (const w of await getAll("social_watch"))
+    if (w.platform === platform && w.keyword === keyword && (country === null || w.country === country))
+      await del("social_watch", [w.platform, w.keyword, w.country]);
+}
 export async function listSocialWatch() {
   const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
-  return (await getAll("social_watch")).sort((a, b) => cmp(a.platform, b.platform) || cmp(a.keyword, b.keyword));
+  return (await getAll("social_watch")).sort((a, b) => cmp(a.platform, b.platform) || cmp(a.keyword, b.keyword)
+    || cmp(a.country || "", b.country || ""));
 }
-export async function touchSocialWatch(platform, keyword) {
-  const w = await get("social_watch", [platform, keyword]);
-  if (w) await put("social_watch", {...w, last_scan_ts: now()});
+export async function touchSocialWatch(platform, keyword, country = null) {
+  for (const w of await getAll("social_watch"))
+    if (w.platform === platform && w.keyword === keyword && (country === null || w.country === country))
+      await put("social_watch", {...w, last_scan_ts: now()});
+}
+
+// ---- hashtag xu hướng theo thị trường (TikTok Creative Center) ----
+
+export async function upsertTrends(market, items, t = null) {
+  t = t || now();
+  await tx("trends", "readwrite", async s => {
+    for (const it of items) {
+      const old = await req(s.trends.get([market, it.name]));
+      s.trends.put({market, name: it.name, rank: it.rank ?? null, prev_rank: old ? old.rank : null, rank_diff: it.rank_diff ?? null,
+        views: it.views ?? null, posts: it.posts ?? null, trend: it.trend || [], first_seen: old ? old.first_seen : t, last_seen: t});
+    }
+  });
+}
+
+export async function listTrends(market = null) {
+  const rows = market ? await getAll("trends", "market", market) : await getAll("trends");
+  const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
+  return rows.sort((a, b) => cmp(a.market, b.market) || ((a.rank === null) - (b.rank === null)) || ((a.rank ?? 0) - (b.rank ?? 0))
+    || cmp(a.name, b.name));
 }
 
 // ---- chế độ an toàn: nhật ký lượt quét theo nền tảng ----
