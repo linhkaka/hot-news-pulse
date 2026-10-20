@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SNAKEMEDIA POD</title>
+<link rel="icon" href="/static/logo.png" type="image/png">
+<link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<aside class="side">
+  <div class="brand"><img class="logo" src="/static/logo.png" alt="SNAKEMEDIA">
+    <div><div class="name">SNAKEMEDIA<span class="pod">POD</span></div><small>Spy QC · Viral · POD · US</small></div></div>
+  <nav id="nav">
+    <a data-view="overview">▦ Tổng quan</a>
+    <div class="group">Thu thập</div>
+    <a data-view="scan">🔍 Quét từ khoá</a>
+    <a data-view="stores">🏪 Quét store win <span class="n" data-tab="stores"></span></a>
+    <a data-view="dig">⤓ Đào sâu <span class="n" data-tab="dig"></span></a>
+    <div class="group">Khám phá</div>
+    <a data-view="potential">🌱 Video Tiềm Năng <span class="n" data-tab="potential"></span></a>
+    <a data-view="sap_win">⚡ Sắp WIN <span class="n" data-count="sap_win"></span></a>
+    <a data-view="win">🏆 Video Win <span class="n" data-count="win"></span></a>
+    <a data-view="scale">↗ Video scale <span class="n" data-count="scale"></span></a>
+    <a data-view="cow">🐄 SP bò sữa <span class="n" data-tab="cow"></span></a>
+    <a data-view="niches">🎯 Niche POD</a>
+    <div class="group">Viral</div>
+    <a data-view="viral">🔥 Video viral <span class="n" id="cnt-viral"></span></a>
+    <a data-view="trends">🌍 Xu hướng thị trường</a>
+    <a data-view="spread">📈 QC đang lan nhanh <span class="n" id="cnt-spread"></span></a>
+    <div class="group">Của tôi</div>
+    <a data-view="follows">★ Theo dõi đặc biệt <span class="n" id="cnt-follows"></span></a>
+    <a data-view="test">🧪 Video test <span class="n" data-tab="test"></span></a>
+    <a data-view="keywords">🌙 Tự quét mỗi đêm <span class="n" id="cnt-keywords"></span></a>
+    <a data-view="safety">🛡 Chế độ an toàn <span class="n" id="cnt-safety"></span></a>
+    <a data-view="notify">🔔 Thông báo</a>
+    <div class="group">Kho</div>
+    <a data-view="shops">🗄 Kho shop</a>
+    <a data-view="all">☰ Tất cả video <span class="n" data-count="all"></span></a>
+    <a data-view="theo_doi">… Chờ thêm dữ liệu <span class="n" data-count="theo_doi"></span></a>
+    <a data-view="trang_cu">⛔ Trang bán cũ <span class="n" data-count="trang_cu"></span></a>
+    <a data-view="cu">⌛ Video già <span class="n" data-count="cu"></span></a>
+    <a data-view="hidden">🙈 Đã ẩn <span class="n" data-tab="hidden"></span></a>
+    <a data-view="history">🕘 Lịch sử quét</a>
+    <a data-view="data">⇄ Góp kho dữ liệu</a>
+  </nav>
+</aside>
+<main>
+  <header><h1 id="title">Tổng quan</h1><div class="pills" id="pills"></div>
+    <input id="search" placeholder="Tìm theo nội dung, shop, từ khoá…"></header>
+  <div id="alert"></div>
+  <section id="content"></section>
+</main>
+<div id="drawer" class="drawer hidden"></div>
+<footer id="logbar"><b>Nhật ký</b> <span id="current">Chưa chạy việc nào</span>
+  <button id="stopBtn" class="hidden">Dừng</button>
+  <pre id="log" class="hidden"></pre></footer>
+<script src="/static/app.js"></script>
+</body>
+</html>
