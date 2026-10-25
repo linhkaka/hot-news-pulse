@@ -574,10 +574,13 @@ async function renderOverview() {
     <h3>Lượt quét gần đây</h3>${scansTable(s.scans)}`;
 }
 
+const SCAN_STATUS = {"dang chay": "đang chạy", xong: "xong", "da dung": "đã dừng", "bo qua": "bỏ qua", checkpoint: "checkpoint",
+  loi: "lỗi", "gian doan": "bị gián đoạn"};
+
 function scansTable(scans) {
   if (!scans.length) return `<div class="note">Chưa quét lần nào.</div>`;
   return `<div class="list"><table><tr><th>Việc</th><th>Trạng thái</th><th>Số QC</th><th>Bắt đầu</th></tr>${scans.map(s =>
-    `<tr><td>${esc(s.target)}</td><td>${esc(s.status)}${s.error ? ` <span class="red" title="${esc(s.error)}">(lỗi)</span>` : ""}</td>
+    `<tr><td>${esc(s.target)}</td><td>${esc(SCAN_STATUS[s.status] || s.status)}${s.error ? ` <span class="red" title="${esc(s.error)}">(lỗi)</span>` : ""}</td>
      <td>${s.n_ads}</td><td>${ago(s.started_ts)}</td></tr>`).join("")}</table></div>`;
 }
 

@@ -69,35 +69,46 @@ def stop_current():
     _state["stop"] = True
 
 
+def _run(kind, title, fn):
+    """Chạy 1 việc, ghi kết quả vào lịch sử quét. Trả về (số QC / video, trạng thái)."""
+    scan_id = db.start_scan(kind, title)
+    try:
+        n = fn() or 0
+        st = "xong" if not _state["stop"] else "da dung"
+        db.finish_scan(scan_id, st, n)
+        log(f"Xong: {title}")
+        return n, st
+    except safety.Skipped as e:
+        db.finish_scan(scan_id, "bo qua", error=str(e)[:500])
+        log(f"Bỏ qua '{title}': {e}")
+        return 0, "bo qua"
+    except safety.CheckpointError as e:
+        safety.block(e.platform, e.reason, e.url)
+        db.finish_scan(scan_id, "checkpoint", error=e.reason)
+        log(f"⚠ {e.reason}. ĐÃ TẠM DỪNG mọi lượt quét {safety.PLATFORMS[e.platform]}. "
+            "Hãy tự xác minh trên trình duyệt rồi bấm 'Đã xử lý, quét tiếp'.")
+        return 0, "checkpoint"
+    except Exception as e:
+        db.finish_scan(scan_id, "loi", error=str(e)[:500])
+        log(f"Lỗi khi chạy '{title}': {e}")
+        return 0, "loi"
+
+
 def _worker():
     while True:
         kind, title, fn = _queue.get()
-        _state["pending"].remove(title)
+        if title in _state["pending"]:
+            _state["pending"].remove(title)
         _state.update(current=title, kind=kind, stop=False, started=time.time(), count=0)
-        scan_id = db.start_scan(kind, title)
-        n, st = 0, "xong"
+        n, st = 0, "loi"
         try:
-            n = fn() or 0
-            st = "xong" if not _state["stop"] else "da dung"
-            db.finish_scan(scan_id, st, n)
-            log(f"Xong: {title}")
-        except safety.Skipped as e:
-            st = "bo qua"
-            db.finish_scan(scan_id, st, error=str(e)[:500])
-            log(f"Bỏ qua '{title}': {e}")
-        except safety.CheckpointError as e:
-            st = "checkpoint"
-            safety.block(e.platform, e.reason, e.url)
-            db.finish_scan(scan_id, st, error=e.reason)
-            log(f"⚠ {e.reason}. ĐÃ TẠM DỪNG mọi lượt quét {safety.PLATFORMS[e.platform]}. "
-                "Hãy tự xác minh trên trình duyệt rồi bấm 'Đã xử lý, quét tiếp'.")
-        except Exception as e:
-            st = "loi"
-            db.finish_scan(scan_id, st, error=str(e)[:500])
+            n, st = _run(kind, title, fn)
+        except Exception as e:      # lỗi ghi cơ sở dữ liệu (đĩa đầy, file bị khoá...): báo rồi chạy việc tiếp theo
             log(f"Lỗi khi chạy '{title}': {e}")
-        SESSION.append({"title": title, "kind": kind, "n": int(n), "status": st,
-                        "secs": int(time.time() - _state["started"]), "ts": int(time.time())})
-        _state.update(current=None, kind=None, count=0)
+        finally:
+            SESSION.append({"title": title, "kind": kind, "n": int(n), "status": st,
+                            "secs": int(time.time() - (_state["started"] or time.time())), "ts": int(time.time())})
+            _state.update(current=None, kind=None, count=0)
 
 
 def start_worker():
@@ -131,7 +142,7 @@ def _parallel(items, work, noun):
 
 
 def fetch_thumbs():
-    todo = db.ads_missing_thumbs()
+    todo = [a for a in db.ads_missing_thumbs() if db.safe_id(a["ad_id"])]   # mã QC làm tên file: chỉ chữ / số
     if not todo:
         return
     log(f"Tải {len(todo)} ảnh thumbnail để nhận diện video trùng")
@@ -206,7 +217,7 @@ def follow_job(kind, key, country):
         else:
             log(f"Quét shop {key}")
             ads = scraper.scan_keyword(key, country, config.DEFAULT_MAX_ADS, log, should_stop, set_progress)
-            ads = [a for a in ads if a.get("domain") == key] or ads
+            ads = [a for a in ads if a.get("domain") == key]       # chỉ QC dẫn về đúng shop
         log(f"Đọc được {len(ads)} QC")
         db.upsert_ads(ads)
         db.touch_follow(kind, key)
@@ -237,6 +248,11 @@ def fetch_social_covers():
             (config.THUMB_DIR / name).write_bytes(r.content)
             db.set_social_cover(v["vid"], name)
         _parallel(todo, work, "ảnh bìa")
+
+
+def follow_title(kind, key, name=None):
+    """Tên việc theo dõi; 2 page trùng tên vẫn là 2 việc khác nhau (hàng đợi bỏ việc trùng tên)."""
+    return f"Theo dõi {kind} {name}" + (f" ({key})" if name and name != key else "") if name else f"Theo dõi {kind} {key}"
 
 
 def social_title(platform, keyword, country):
@@ -279,7 +295,7 @@ def queue_all_watched(reason):
         n += submit("keyword", f"Quét '{w['keyword']}'",
                     keyword_job(w["keyword"], w["country"] or country, config.DEFAULT_MAX_ADS))
     for f in db.list_follows():
-        n += submit("follow", f"Theo dõi {f['kind']} {f['name'] or f['key']}", follow_job(f["kind"], f["key"], country))
+        n += submit("follow", follow_title(f["kind"], f["key"], f["name"]), follow_job(f["kind"], f["key"], country))
     for w in db.list_social_watch():
         c = w["country"] or country
         n += submit("social", social_title(w["platform"], w["keyword"], c),
@@ -393,7 +409,7 @@ def sweep_job(domain, country):
         known = {a["ad_id"] for a in db.all_ads()}          # QC đã có trước lượt soi
         log(f"Soi store {domain}")
         ads = scraper.scan_keyword(domain, country, config.DEFAULT_MAX_ADS, log, should_stop, set_progress)
-        ads = [a for a in ads if a.get("domain") == domain] or ads
+        ads = [a for a in ads if a.get("domain") == domain]    # chỉ QC dẫn về đúng shop
         db.upsert_ads(ads)
         process_after_scan()
         fresh = {a["ad_id"] for a in ads} - known

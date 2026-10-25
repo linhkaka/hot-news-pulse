@@ -1,4 +1,5 @@
 import json
+import re
 import sqlite3
 import threading
 import time
@@ -7,6 +8,12 @@ from contextlib import contextmanager
 from . import config
 
 _lock = threading.Lock()
+_SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_HEX16 = re.compile(r"^[0-9a-f]{16}$")
+
+
+def safe_id(value):
+    return bool(_SAFE_ID.match(str(value or "")))
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ads (
@@ -214,6 +221,11 @@ def init():
                 INSERT OR IGNORE INTO social_watch SELECT platform, keyword, COALESCE(country, ''), added_ts, last_scan_ts
                     FROM social_watch_old;
                 DROP TABLE social_watch_old;""")
+        # Bản 1.x lưu cả nước cho TikTok tìm kiếm / Reels (không chọn được nước) -> đưa về '' để khớp bản mới
+        conn.execute("""UPDATE OR IGNORE social_watch SET country='' WHERE country != ''
+                        AND platform NOT IN ('tiktok_ads', 'tiktok_trend', 'tiktok_tags')""")
+        conn.execute("""DELETE FROM social_watch WHERE country != ''
+                        AND platform NOT IN ('tiktok_ads', 'tiktok_trend', 'tiktok_tags')""")
 
 
 def upsert_ads(ads, keyword=None):
@@ -388,6 +400,15 @@ def get_setting(key, default=None):
 def set_setting(key, value):
     with _lock, connect() as conn:
         conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, json.dumps(value)))
+
+
+def update_setting(key, fn, default=None):
+    """Đọc - sửa - ghi 1 cài đặt trong 1 lần khoá (2 luồng cùng sửa không mất dữ liệu). fn(giá trị cũ) -> giá trị mới."""
+    with _lock, connect() as conn:
+        r = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
+        value = fn(json.loads(r[0]) if r else default)
+        conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)", (key, json.dumps(value)))
+        return value
 
 
 # ---- thống kê theo shop / page ----
@@ -567,6 +588,11 @@ def mark_notified(kind, keys):
         conn.executemany("INSERT OR IGNORE INTO notified (kind, key, ts) VALUES (?, ?, ?)", [(kind, k, now) for k in keys])
 
 
+def mark_interrupted_scans():
+    with _lock, connect() as conn:
+        conn.execute("UPDATE scans SET status='gian doan', finished_ts=? WHERE status='dang chay'", (int(time.time()),))
+
+
 def ad_keywords():
     """Mọi từ khoá đã quét ra QC (chữ thường)."""
     with connect() as conn:
@@ -591,12 +617,26 @@ def rekey(videos):
         known = set()
         for t in _KEYED:
             known |= {r[0] for r in conn.execute(f"SELECT DISTINCT cid FROM {t}")}
+        known |= {r[0] for r in conn.execute("SELECT key FROM notified WHERE kind IN ('sap_win', 'win')")}
+        r = conn.execute("SELECT value FROM settings WHERE key='clones'").fetchone()
+        clones = json.loads(r[0]) if r else {}
+        known |= set(clones)
+        moved = False
         for v in videos:
             olds = {a["ad_id"] for a in v["ads"]} & known - {v["cid"]}
             for old in olds:
                 for t in _KEYED:
                     conn.execute(f"UPDATE OR IGNORE {t} SET cid=? WHERE cid=?", (v["cid"], old))
                     conn.execute(f"DELETE FROM {t} WHERE cid=?", (old,))
+                # đã báo Sắp WIN / Win cho mã cũ thì không báo lại; video đã clone vẫn hiện "Đã clone"
+                conn.execute("UPDATE OR IGNORE notified SET key=? WHERE kind IN ('sap_win', 'win') AND key=?", (v["cid"], old))
+                conn.execute("DELETE FROM notified WHERE kind IN ('sap_win', 'win') AND key=?", (old,))
+                if old in clones:
+                    clones.setdefault(v["cid"], clones[old])
+                    del clones[old]
+                    moved = True
+        if moved:
+            conn.execute("INSERT OR REPLACE INTO settings (key, value) VALUES ('clones', ?)", (json.dumps(clones),))
 
 
 def record_history(videos, day):
@@ -691,9 +731,14 @@ def import_data(data):
     new_ads = new_lands = 0
     with _lock, connect() as conn:
         for a in data.get("ads") or []:
-            if not isinstance(a, dict) or not a.get("ad_id"):
-                continue
+            if not isinstance(a, dict) or not _SAFE_ID.match(str(a.get("ad_id") or "")):
+                continue                                 # mã QC lạ (vd chứa "../") -> bỏ, vì mã dùng làm tên file ảnh
             row = {k: a.get(k) for k in _AD_COLS}
+            for k in ("link_url", "thumb_url", "video_url"):
+                if row.get(k) and not str(row[k]).startswith(("http://", "https://")):
+                    row[k] = None
+            if row.get("dhash") and not _HEX16.match(str(row["dhash"])):
+                row["dhash"] = None
             old = conn.execute("SELECT * FROM ads WHERE ad_id=?", (row["ad_id"],)).fetchone()
             if not old:
                 conn.execute(f"INSERT INTO ads ({','.join(_AD_COLS)}) VALUES ({','.join('?' * len(_AD_COLS))})",
@@ -709,7 +754,7 @@ def import_data(data):
                  row["is_active"] if newer else old["is_active"], row["end_ts"] if newer else old["end_ts"],
                  max(old["last_seen"] or 0, row["last_seen"] or 0), row["ad_id"]))
         for l in data.get("landings") or []:
-            if not isinstance(l, dict) or not l.get("url"):
+            if not isinstance(l, dict) or not str(l.get("url") or "").startswith(("http://", "https://")):
                 continue
             old = conn.execute("SELECT checked_ts FROM landings WHERE url=?", (l["url"],)).fetchone()
             if old and (old[0] or 0) >= (l.get("checked_ts") or 0):

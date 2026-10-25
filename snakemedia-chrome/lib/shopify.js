@@ -9,15 +9,13 @@
 import {C, URLS} from "./config.js";
 import * as db from "./db.js";
 import {TITLE_RE, priceFromHtml} from "./landing.js";
+import {unescape} from "./html.js";
 
 const SHOP_RE = /^[a-z0-9][a-z0-9-]*\.myshopify\.com$/;
 const OG_RE = /<meta[^>]+(?:property|name)=["'](og:[a-z:_]+|product:price:amount|twitter:image)["'][^>]*>/gi;
 const CONTENT_RE = /content=["']([^"']*)["']/i;
 const DANGER_RE = /<(script|style|iframe|object|embed)[^>]*>[\s\S]*?<\/\1\s*>|<(script|iframe|object|embed)[^>]*\/?>/gi;
 const ON_RE = /\s+on[a-z]+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi;
-const ENT = {amp: "&", lt: "<", gt: ">", quot: '"', apos: "'"};
-const unescape = s => s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (m, e) => e[0] === "#"
-  ? String.fromCodePoint(e[1].toLowerCase() === "x" ? parseInt(e.slice(2), 16) : +e.slice(1)) : ENT[e.toLowerCase()] ?? m);
 const escapeHtml = s => s.replace(/[&<>"']/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#x27;"}[c]));
 
 export const MUTATION = `mutation productSet($input: ProductSetInput!, $synchronous: Boolean!) {

@@ -78,8 +78,9 @@ def _token(s, client):
                            "cài (Install app) vào đúng store này chưa.")
     j = r.json()
     s["token"], s["token_exp"] = j["access_token"], int(time.time()) + int(j.get("expires_in") or 86399)
-    if s.get("name"):                             # đã kết nối: lưu mã mới để dùng lại
-        db.set_setting("shopify", s)
+    if s.get("name"):                             # đã kết nối: lưu mã mới (chỉ khi vẫn đang nối đúng store này)
+        db.update_setting("shopify", lambda cur: {**cur, "token": s["token"], "token_exp": s["token_exp"]}
+                          if (cur or {}).get("shop") == s["shop"] and cur.get("name") else cur, {})
     return s["token"]
 
 
@@ -253,7 +254,5 @@ def clone(url, cid=None):
     rec = {"url": url, "product_id": p["id"], "title": p.get("title") or src["title"], "admin_url": admin_url(s["shop"], p["id"]),
            "shop": s["shop"], "ts": int(time.time()), "images": len(src["images"]), "variants": len(inp["variants"])}
     if cid:
-        clones = db.get_setting("clones", {})
-        clones[cid] = rec
-        db.set_setting("clones", clones)
+        db.update_setting("clones", lambda c: {**(c or {}), cid: rec}, {})
     return rec

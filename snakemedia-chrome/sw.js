@@ -33,6 +33,7 @@ async function init() {
   applyDev(dev);
   await registerCapture();
   await chrome.alarms.create("tick", {periodInMinutes: 1});
+  await db.fixSocialWatchCountry().catch(e => console.error(e));
   await jobs.restore();
   // Cập nhật lên bản có tab Tiềm năng / Bò sữa / lịch sử: chấm lại 1 lần để video cũ có đủ số liệu mới
   if ((await db.getSetting("schema", 1)) < 2) {

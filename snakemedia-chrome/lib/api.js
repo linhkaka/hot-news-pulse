@@ -23,8 +23,11 @@ const DAY = 86400;
 const routes = [];
 function route(method, pattern, fn) {
   const re = new RegExp("^" + pattern.replace(/\{(\w+)(:path)?\}/g, (_, n, p) => (p ? `(?<${n}>.+)` : `(?<${n}>[^/]+)`)) + "$");
-  routes.push({method, re, fn});
+  routes.push({method, re, fn, pattern});
 }
+
+const REAL_WRITES = ["/api/scan", "/api/viral/scan", "/api/follows", "/api/import", "/api/kwtrends/refresh",
+  "/api/stores/sweep", "/api/autoscan/run"];
 
 export async function handle({method = "GET", path, body = null}) {
   const [p, query] = String(path).split("?");
@@ -34,6 +37,8 @@ export async function handle({method = "GET", path, body = null}) {
     if (!m) continue;
     const params = Object.fromEntries(Object.entries(m.groups || {}).map(([k, v]) => [k, decodeURIComponent(v)]));
     try {
+      // Đang xem dữ liệu mẫu mà bạn bắt đầu thêm dữ liệu thật -> xoá dữ liệu mẫu TRƯỚC, để không xoá nhầm cái vừa thêm
+      if (method === "POST" && REAL_WRITES.includes(r.pattern)) await demo.clearIfDemo(jobs.log);
       return {ok: true, status: 200, data: await r.fn({params, q: new URLSearchParams(query || ""), body: body || {}})};
     } catch (e) {
       if (e instanceof HttpError) return {ok: false, status: e.status, detail: e.message};
@@ -171,7 +176,7 @@ route("GET", "/api/videos/{cid}", async ({params}) => {
 route("POST", "/api/videos/{cid}/dig", async ({params, q}) => {
   const v = await db.getVideo(params.cid);
   need(v, "Not Found", 404);
-  jobs.submit("dig", `Đào sâu '${v.title.slice(0, 40)}'`, {cid: params.cid, country: q.get("country") || C.DEFAULT_COUNTRY});
+  jobs.submit("dig", `Đào sâu '${v.title.slice(0, 40)}' #${params.cid}`, {cid: params.cid, country: q.get("country") || C.DEFAULT_COUNTRY});
   return {ok: true};
 });
 
@@ -199,7 +204,7 @@ route("POST", "/api/marks", async ({body}) => {
 route("POST", "/api/dig/batch", async ({body}) => {
   let n = 0;
   for (const v of (await jobs.digCandidates()).slice(0, Math.max(1, Math.min(+body.n || 10, 50))))
-    n += jobs.submit("dig", `Đào sâu '${v.title.slice(0, 40)}'`, {cid: v.cid, country: C.DEFAULT_COUNTRY});
+    n += jobs.submit("dig", `Đào sâu '${v.title.slice(0, 40)}' #${v.cid}`, {cid: v.cid, country: C.DEFAULT_COUNTRY});
   return {queued: n};
 });
 
@@ -361,7 +366,7 @@ route("POST", "/api/media/batch", async ({body}) => {
   need(["video", "image", "both"].includes(body.kind || "video"), "kind phải là video / image / both");
   const targets = [...(body.cids || []).map(c => ["video", c]), ...(body.vids || []).map(v => ["social", v])].slice(0, C.MEDIA_BATCH_MAX);
   need(targets.length, "Chưa chọn video nào");
-  const queued = jobs.submit("media", `Tải ${targets.length} video (${body.kind || "video"})`, {targets, kind: body.kind || "video"});
+  const queued = jobs.submit("media", `Tải ${targets.length} video (${body.kind || "video"}) lúc ${new Date().toTimeString().slice(0, 8)}`, {targets, kind: body.kind || "video"});
   return {queued: queued ? 1 : 0, folder: "Tải về/SnakemediaPOD"};
 });
 
@@ -497,9 +502,12 @@ route("GET", "/api/follows", async () => {
 });
 
 route("POST", "/api/follows", async ({body}) => {
-  const key = String(body.key || "").trim();
+  let key = String(body.key || "").trim();
   need(["page", "shop"].includes(body.kind) && key, "kind phải là 'page' hoặc 'shop'");
-  await db.addFollow(body.kind, key, body.name ?? null);
+  // dán cả link shop -> chỉ lấy tên miền (giống cách lưu QC: chữ thường, bỏ www.)
+  if (body.kind === "shop") key = key.toLowerCase().replace(/^[a-z]+:\/\//, "").split("/")[0].split("?")[0].replace(/^www\./, "");
+  need(key, "Tên shop không hợp lệ");
+  await db.addFollow(body.kind, key, body.kind === "page" ? (body.name ?? null) : (body.name || key));
   return {ok: true};
 });
 
@@ -511,7 +519,7 @@ route("DELETE", "/api/follows/{kind}/{key}", async ({params}) => {
 route("POST", "/api/follows/{kind}/{key}/scan", async ({params, q}) => {
   const f = (await db.listFollows()).find(x => x.kind === params.kind && x.key === params.key);
   need(f, "Not Found", 404);
-  jobs.submit("follow", `Theo dõi ${params.kind} ${f.name || params.key}`,
+  jobs.submit("follow", jobs.followTitle(params.kind, params.key, f.name),
     {kind: params.kind, key: params.key, country: q.get("country") || C.DEFAULT_COUNTRY});
   return {ok: true};
 });

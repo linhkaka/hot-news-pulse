@@ -5,3 +5,4 @@ import pytest
 def _no_auto_scan(monkeypatch):
     """Lịch tự quét chạy theo giờ thật; tắt trong bài kiểm thử để kết quả không đổi theo giờ chạy."""
     monkeypatch.setenv("SNAKEPOD_NO_SCHEDULER", "1")
+    monkeypatch.setenv("SNAKEPOD_TEST", "1")      # cho phép tên máy "testserver" của TestClient

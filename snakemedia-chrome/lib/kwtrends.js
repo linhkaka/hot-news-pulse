@@ -3,11 +3,10 @@
 //
 // Kết quả lưu trong setting "kwtrends" = {nguồn: {thị trường: {ts, items}}}.
 // Mỗi mục: term (từ khoá), score (độ lớn để xếp), growth (% tăng, Pinterest), info (ghi chú ngắn), group (danh mục).
+import {unescape} from "./html.js";
+
 export const SOURCES = {pinterest: "Pinterest Trends", google: "Google Trends"};
 
-const ENT = {amp: "&", lt: "<", gt: ">", quot: '"', apos: "'", "#39": "'"};
-const unescape = s => s.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+|#39);/gi, (m, e) => e[0] === "#" && e !== "#39"
-  ? String.fromCodePoint(e[1].toLowerCase() === "x" ? parseInt(e.slice(2), 16) : +e.slice(1)) : ENT[e.toLowerCase()] ?? m);
 
 function tag(block, name) {
   const m = new RegExp(`<${name}>([\\s\\S]*?)</${name}>`).exec(block);
@@ -56,7 +55,7 @@ function pyRound(x) {
 function walk(x, group, out) {
   if (Array.isArray(x)) { for (const v of x) walk(v, group, out); return; }
   if (!x || typeof x !== "object") return;
-  const g = GROUP_KEYS.map(k => x[k]).find(v => typeof v === "string") ?? group;
+  const g = GROUP_KEYS.map(k => x[k]).find(v => typeof v === "string") || group;   // "" -> lấy danh mục cha (giống Python)
   const term = TERM_KEYS.map(k => x[k]).find(v => typeof v === "string" && v.trim());
   const gv = growth(x);
   if (term && gv !== null) {

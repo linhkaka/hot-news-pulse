@@ -126,9 +126,29 @@ async function checkPage(platform, tabId) {
 
 // 1 cửa sổ riêng cho mỗi lượt quét, đóng lại khi xong. Cửa sổ phải hiện trên màn hình:
 // Chrome ngừng vẽ trang trong cửa sổ bị thu nhỏ / bị che hết, khi đó Facebook không tải thêm QC.
+// Mã cửa sổ quét đang mở được ghi lại: Chrome tắt giữa chừng thì lần mở sau đóng cửa sổ còn sót.
+async function trackWindow(id, open) {
+  const {scanWindows = []} = await chrome.storage.local.get("scanWindows");
+  const ids = open ? [...new Set([...scanWindows, id])] : scanWindows.filter(x => x !== id);
+  await chrome.storage.local.set({scanWindows: ids});
+}
+
 async function openScanWindow() {
   const w = await chrome.windows.create({url: "about:blank", focused: true, type: "normal", width: 1280, height: 900});
+  await trackWindow(w.id, true).catch(() => {});
   return {windowId: w.id, tabId: w.tabs[0].id};
+}
+
+async function closeScanWindow(id) {
+  await chrome.windows.remove(id).catch(() => {});
+  await trackWindow(id, false).catch(() => {});
+}
+
+// Gọi khi phần nền khởi động lại: đóng cửa sổ quét của lượt bị gián đoạn
+export async function closeLeftoverWindows() {
+  const {scanWindows = []} = await chrome.storage.local.get("scanWindows");
+  for (const id of scanWindows) await chrome.windows.remove(id).catch(() => {});
+  await chrome.storage.local.set({scanWindows: []});
 }
 
 async function saveDiag(win, label, url, raws, error, nItems, log) {
@@ -206,7 +226,7 @@ export async function collect(url, maxItems, log, stop = () => false, {
     throw e;
   } finally {
     sessions.delete(win.tabId);
-    if (own) await chrome.windows.remove(win.windowId).catch(() => {});
+    if (own) await closeScanWindow(win.windowId);
   }
   return [...items.values()].slice(0, maxItems);
 }
@@ -230,7 +250,7 @@ export async function scanPages(pageIds, country, maxAds, log, stop = () => fals
       out.push(...await collect(pageUrl(pageIds[i], country), maxAds, log, stop, {win, progress: progress && (n => progress(b + n))}));
     }
   } finally {
-    await chrome.windows.remove(win.windowId).catch(() => {});
+    await closeScanWindow(win.windowId);
   }
   return out;
 }

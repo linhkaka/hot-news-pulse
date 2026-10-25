@@ -203,7 +203,7 @@ export const parseReelsHtml = html => collectItems(htmlBlobs(html), reelItem);
 
 // ---------------- Chấm điểm ----------------
 
-function pyRound(x, nd = 0) {
+export function pyRound(x, nd = 0) {
   const k = 10 ** nd, y = x * k, r = Math.round(y);
   return (Math.abs(y % 1) === 0.5 ? 2 * Math.round(y / 2) : r) / k;
 }

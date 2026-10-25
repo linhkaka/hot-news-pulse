@@ -182,6 +182,11 @@ export async function finishScan(id, status, nAds = 0, error = null) {
   });
 }
 
+// Chrome tắt giữa chừng lần trước -> lượt quét đó không còn "đang chạy"
+export async function markInterruptedScans() {
+  for (const r of await getAll("scans")) if (r.status === "dang chay") await put("scans", {...r, status: "gian doan", finished_ts: now()});
+}
+
 export async function listScans(limit = 50) {
   return (await getAll("scans")).sort((a, b) => b.id - a.id).slice(0, limit);
 }
@@ -324,6 +329,16 @@ export async function removeSocialWatch(platform, keyword, country = null) {
     if (w.platform === platform && w.keyword === keyword && (country === null || w.country === country))
       await del("social_watch", [w.platform, w.keyword, w.country]);
 }
+// Bản 1.x lưu cả nước cho TikTok tìm kiếm / Reels (không chọn được nước) -> đưa về "" để khớp bản mới
+const MARKET_PLATFORMS = ["tiktok_ads", "tiktok_trend", "tiktok_tags"];
+export async function fixSocialWatchCountry() {
+  for (const w of await getAll("social_watch")) {
+    if (!w.country || MARKET_PLATFORMS.includes(w.platform)) continue;
+    await del("social_watch", [w.platform, w.keyword, w.country]);
+    if (!(await get("social_watch", [w.platform, w.keyword, ""]))) await put("social_watch", {...w, country: ""});
+  }
+}
+
 export async function listSocialWatch() {
   const cmp = (a, b) => (a < b ? -1 : a > b ? 1 : 0);
   return (await getAll("social_watch")).sort((a, b) => cmp(a.platform, b.platform) || cmp(a.keyword, b.keyword)

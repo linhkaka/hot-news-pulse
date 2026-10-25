@@ -145,7 +145,7 @@ Chạy từ mã nguồn trên Windows: cài Python 3.11+ (tick "Add python.exe t
 
 ```
 pip install -r requirements.txt
-python -m pytest            # 63 bài kiểm thử (có quét Chromium thật trên trang giả)
+python -m pytest            # 70 bài kiểm thử (có quét Chromium thật trên trang giả)
 python -m snakepod          # chạy máy chủ
 ```
 

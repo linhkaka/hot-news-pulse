@@ -32,6 +32,7 @@ class _UnionFind:
 
 
 _WORD_RE = re.compile(r"[a-z0-9]+")
+HEX16 = re.compile(r"^[0-9a-f]{16}$")
 _HANDLE_RE = re.compile(r"/products?/([^/?#]+)")
 
 
@@ -84,17 +85,18 @@ def cluster(ads, max_distance=config.DHASH_MAX_DISTANCE, loose_distance=config.D
     """
     uf = _UnionFind()
     by_key = defaultdict(list)
+    dh = {a["ad_id"]: a["dhash"] for a in ads if a.get("dhash") and HEX16.match(a["dhash"])}   # bỏ mã ảnh hỏng (file nhập)
     for a in ads:
         uf.find(a["ad_id"])
         if a.get("collation_id"):
             by_key["c:" + a["collation_id"]].append(a["ad_id"])
-        if a.get("dhash"):
-            by_key["h:" + a["dhash"]].append(a["ad_id"])
+        if a["ad_id"] in dh:
+            by_key["h:" + dh[a["ad_id"]]].append(a["ad_id"])
     for ids in by_key.values():
         for other in ids[1:]:
             uf.union(ids[0], other)
 
-    hashes = sorted({a["dhash"] for a in ads if a.get("dhash")})
+    hashes = sorted(set(dh.values()))
     ints = [int(h, 16) for h in hashes]
     for i, j in near_pairs(ints, max_distance):
         uf.union(by_key["h:" + hashes[i]][0], by_key["h:" + hashes[j]][0])
@@ -102,11 +104,11 @@ def cluster(ads, max_distance=config.DHASH_MAX_DISTANCE, loose_distance=config.D
     # Mức lỏng: chỉ so các ảnh có chung nội dung chữ hoặc chung sản phẩm (nhóm nhỏ -> so từng cặp được)
     groups_by_hint = defaultdict(set)
     for a in ads:
-        if not a.get("dhash"):
+        if a["ad_id"] not in dh:
             continue
         for hint in (text_key(a.get("body")), product_key(a.get("link_url"))):
             if hint:
-                groups_by_hint[hint].add(a["dhash"])
+                groups_by_hint[hint].add(dh[a["ad_id"]])
     for members in groups_by_hint.values():
         members = sorted(members)[:300]
         for x in range(len(members)):

@@ -10,6 +10,7 @@ import * as notify from "./notify.js";
 import * as safety from "./safety.js";
 import * as scanner from "./scanner.js";
 import * as social from "./social.js";
+import {pyRound} from "./social.js";
 import * as demo from "./demo.js";
 import {fetchImage} from "./imagehash.js";
 import * as media from "./media.js";
@@ -17,14 +18,15 @@ import * as kwtrends from "./kwtrends.js";
 import {parseJsonText} from "./fbparser.js";
 
 const LOG = [];
-const state = {current: null, pending: [], stop: false, running: false, kind: null, started: null, count: 0};
+const state = {current: null, pending: [], stop: false, running: false, kind: null, started: null, count: 0, job: null};
 // Phiên quét: các việc đã xong kể từ lúc hàng đợi rảnh -> bảng tiến độ "đang quét 9 / 25"
 const SESSION = [];
 const EST_JOB_S = 120;          // ước lượng 1 việc khi chưa có việc nào xong (giây)
 const hasStorage = () => globalThis.chrome && chrome.storage && chrome.storage.local;
 
 function persist() {
-  if (hasStorage()) chrome.storage.local.set({jobs: {pending: state.pending, current: state.current, log: LOG}}).catch(() => {});
+  // Lưu cả việc đang chạy (không chỉ tên) để Chrome tắt giữa chừng thì lần mở sau chạy lại việc đó
+  if (hasStorage()) chrome.storage.local.set({jobs: {pending: state.pending, current: state.current, job: state.job, log: LOG}}).catch(() => {});
 }
 
 export function log(msg) {
@@ -47,7 +49,7 @@ export function progress(t = Date.now() / 1000) {
   const left = state.pending.length * avg + (cur ? Math.max(0, avg - cur.secs) : 0);
   return {done: done.slice(-30), n_done: done.length, current: cur, pending: state.pending.map(j => j.title),
     total: done.length + (cur ? 1 : 0) + state.pending.length, items,
-    rate: secs >= 30 ? Math.round(items * 60 / secs) : null, eta_s: cur || state.pending.length ? Math.trunc(left) : 0};
+    rate: secs >= 30 ? pyRound(items * 60 / secs) : null, eta_s: cur || state.pending.length ? Math.trunc(left) : 0};
 }
 
 // Chỉ dùng cho bài kiểm thử
@@ -78,7 +80,13 @@ export async function restore() {
   const {jobs} = await chrome.storage.local.get("jobs");
   if (!jobs) return;
   LOG.splice(0, LOG.length, ...(jobs.log || []));
-  if (jobs.current) log(`Việc '${jobs.current}' bị gián đoạn (Chrome tắt hoặc tiện ích khởi động lại)`);
+  await scanner.closeLeftoverWindows().catch(() => {});
+  await db.markInterruptedScans().catch(() => {});
+  if (jobs.current) {
+    const again = jobs.job && !jobs.job.retried;   // chạy lại 1 lần; gián đoạn lần 2 thì bỏ (tránh lặp mãi)
+    log(`Việc '${jobs.current}' bị gián đoạn (Chrome tắt hoặc tiện ích khởi động lại)` + (again ? " — chạy lại" : ""));
+    if (again && !state.pending.some(p => p.title === jobs.job.title)) state.pending.unshift({...jobs.job, retried: true});
+  }
   for (const j of jobs.pending || []) if (!state.pending.some(p => p.title === j.title)) state.pending.push(j);
   persist();
   kick();
@@ -87,46 +95,55 @@ export async function restore() {
 function kick() {
   if (state.running) return;
   state.running = true;
-  runLoop().finally(() => { state.running = false; });
+  runLoop().catch(e => log(`Lỗi hàng đợi: ${e && e.message || e}`)).finally(() => {
+    state.running = false;
+    if (state.pending.length) kick();
+  });
+}
+
+// Ghi kết quả vào lịch sử quét; lỗi ghi (bộ nhớ đầy...) không được làm dừng hàng đợi
+async function finish(scanId, st, n, err = null) {
+  if (scanId == null) return;
+  try { await db.finishScan(scanId, st, n, err); } catch (e) { console.error(e); }
 }
 
 async function runLoop() {
   while (state.pending.length) {
     const job = state.pending.shift();
-    Object.assign(state, {current: job.title, kind: job.kind, stop: false, started: Date.now() / 1000, count: 0});
+    Object.assign(state, {current: job.title, kind: job.kind, stop: false, started: Date.now() / 1000, count: 0, job});
     persist();
-    let n = 0, st = "xong";
+    let n = 0, st = "xong", scanId = null;
     // Giữ phần nền của tiện ích thức trong lúc chạy việc dài (Chrome tự tắt phần nền rảnh sau 30 giây)
     const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo().catch(() => {}), 20000);
-    const scanId = await db.startScan(job.kind, job.title);
     try {
+      scanId = await db.startScan(job.kind, job.title);
       n = (await JOBS[job.kind](job.args)) || 0;
       st = state.stop ? "da dung" : "xong";
-      await db.finishScan(scanId, st, n);
+      await finish(scanId, st, n);
       log(`Xong: ${job.title}`);
     } catch (e) {
       n = 0;
       if (e instanceof safety.Skipped) {
         st = "bo qua";
-        await db.finishScan(scanId, "bo qua", 0, String(e.message).slice(0, 500));
+        await finish(scanId, "bo qua", 0, String(e.message).slice(0, 500));
         log(`Bỏ qua '${job.title}': ${e.message}`);
       } else if (e instanceof safety.CheckpointError) {
         st = "checkpoint";
-        await safety.block(e.platform, e.reason, e.url);
-        await db.finishScan(scanId, "checkpoint", 0, e.reason);
+        await safety.block(e.platform, e.reason, e.url).catch(() => {});
+        await finish(scanId, "checkpoint", 0, e.reason);
         log(`⚠ ${e.reason}. ĐÃ TẠM DỪNG mọi lượt quét ${safety.PLATFORMS[e.platform]}. ` +
           "Hãy tự xác minh trên Facebook/TikTok rồi bấm 'Đã xử lý, quét tiếp'.");
         await notify.send(`⚠ SNAKEMEDIA POD: ${e.reason}`, ["Đã tạm dừng quét để bảo vệ tài khoản."], log).catch(() => {});
       } else {
         st = "loi";
-        await db.finishScan(scanId, "loi", 0, String(e && e.message || e).slice(0, 500));
+        await finish(scanId, "loi", 0, String(e && e.message || e).slice(0, 500));
         log(`Lỗi khi chạy '${job.title}': ${e && e.message || e}`);
       }
     } finally {
       clearInterval(keepAlive);
       SESSION.push({title: job.title, kind: job.kind, n: Math.trunc(n), status: st, secs: Math.trunc(Date.now() / 1000 - state.started), ts: db.now()});
       if (SESSION.length > 200) SESSION.splice(0, SESSION.length - 200);
-      Object.assign(state, {current: null, kind: null, count: 0});
+      Object.assign(state, {current: null, kind: null, count: 0, job: null});
       persist();
     }
   }
@@ -374,8 +391,13 @@ function schedulePassive() {
 }
 
 // Gọi từ sw.js với dữ liệu 1 tab không do tiện ích quét. Trả về số QC/video đã lưu.
+// Tên việc theo dõi; 2 page trùng tên vẫn là 2 việc khác nhau (hàng đợi bỏ việc trùng tên)
+export const followTitle = (kind, key, name = null) =>
+  name ? `Theo dõi ${kind} ${name}` + (name !== key ? ` (${key})` : "") : `Theo dõi ${kind} ${key}`;
+
 export async function passiveCapture(pageUrl, texts) {
   if (!(await passiveEnabled())) return 0;
+  await demo.clearIfDemo(log);           // dữ liệu thật đầu tiên -> xoá dữ liệu mẫu TRƯỚC khi lưu
   const u = String(pageUrl || "");
   let n = 0;
   for (const text of texts) {
@@ -407,7 +429,7 @@ export async function queueAllWatched(reason) {
   for (const w of await db.listWatchKeywords())
     n += submit("keyword", `Quét '${w.keyword}'`, {keyword: w.keyword, country: w.country || country, max_ads: C.DEFAULT_MAX_ADS});
   for (const f of await db.listFollows())
-    n += submit("follow", `Theo dõi ${f.kind} ${f.name || f.key}`, {kind: f.kind, key: f.key, country});
+    n += submit("follow", followTitle(f.kind, f.key, f.name), {kind: f.kind, key: f.key, country});
   for (const w of await db.listSocialWatch())
     n += submit("social", socialTitle(w.platform, w.keyword, w.country || country),
       {platform: w.platform, keyword: w.keyword, country: w.country || country, max_items: C.DEFAULT_MAX_ADS});

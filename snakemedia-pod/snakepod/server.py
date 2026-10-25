@@ -1,9 +1,11 @@
+import os
+import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -20,6 +22,7 @@ LABELS = {"sap_win": "Sắp WIN", "win": "Video Win", "scale": "Video scale", "t
 @asynccontextmanager
 async def lifespan(_app):
     db.init()
+    db.mark_interrupted_scans()     # tool tắt giữa chừng lần trước -> lượt quét đó không còn "đang chạy"
     config.THUMB_DIR.mkdir(parents=True, exist_ok=True)
     jobs.start_worker()
     # Cập nhật lên bản có tab Tiềm năng / Bò sữa / lịch sử: chấm lại 1 lần để video cũ có đủ số liệu mới
@@ -31,6 +34,19 @@ async def lifespan(_app):
 
 
 app = FastAPI(title="SNAKEMEDIA POD", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def local_only(request, call_next):
+    """Chỉ phục vụ chính giao diện của tool: chặn trang web lạ gọi API (CSRF) và chặn đổi tên miền trỏ về máy (DNS rebinding)."""
+    host = (request.headers.get("host") or "").lower()
+    name = host.rsplit(":", 1)[0] if not host.startswith("[") else host.split("]")[0] + "]"
+    if name not in ("127.0.0.1", "localhost", "[::1]") and not (name == "testserver" and os.environ.get("SNAKEPOD_TEST") == "1"):
+        return JSONResponse({"detail": "Forbidden host"}, status_code=403)
+    origin = request.headers.get("origin")
+    if request.method not in ("GET", "HEAD", "OPTIONS") and origin and origin.lower() not in (f"http://{host}",):
+        return JSONResponse({"detail": "Forbidden origin"}, status_code=403)
+    return await call_next(request)
 
 
 class ScanIn(BaseModel):
@@ -264,7 +280,7 @@ def viral_keywords():
     return db.list_social_watch()
 
 
-@app.delete("/api/viral/keywords/{platform}/{keyword}")
+@app.delete("/api/viral/keywords/{platform}/{keyword:path}")   # từ khoá có thể chứa "/"
 def delete_viral_keyword(platform: str, keyword: str, country: str | None = None):
     db.remove_social_watch(platform, keyword.strip(), country)   # Top Ads không từ khoá được gửi là " "
     return {"ok": True}
@@ -393,7 +409,7 @@ def media_batch(body: MediaBatchIn):
                     jobs.log(f"  bỏ qua {urls[3]} ({t}): {e.detail}")
         jobs.log(f"Đã lưu {ok} file" + (f" vào {folder}" if folder else "") + (f", {fail} file lỗi" if fail else ""))
         return ok
-    queued = jobs.submit("media", f"Tải {len(targets)} video ({body.kind})", run)
+    queued = jobs.submit("media", f"Tải {len(targets)} video ({body.kind}) lúc {time.strftime('%H:%M:%S')}", run)
     return {"queued": int(queued), "folder": str(config.MEDIA_DIR)}
 
 
@@ -589,7 +605,7 @@ def set_mark(body: MarkIn):
 def dig_batch(body: CountIn):
     n = 0
     for v in jobs.dig_candidates()[:max(1, min(body.n, 50))]:
-        n += jobs.submit("dig", f"Đào sâu '{v['title'][:40]}'", jobs.dig_job(v["cid"], config.DEFAULT_COUNTRY))
+        n += jobs.submit("dig", f"Đào sâu '{v['title'][:40]}' #{v['cid']}", jobs.dig_job(v["cid"], config.DEFAULT_COUNTRY))
     return {"queued": n}
 
 
@@ -641,7 +657,7 @@ def keywords():
     return db.list_watch_keywords()
 
 
-@app.delete("/api/keywords/{keyword}")
+@app.delete("/api/keywords/{keyword:path}")
 def delete_keyword(keyword: str):
     db.remove_watch_keyword(keyword)
     return {"ok": True}
@@ -697,7 +713,12 @@ def follows():
 def add_follow(body: FollowIn):
     if body.kind not in ("page", "shop") or not body.key.strip():
         raise HTTPException(400, "kind phải là 'page' hoặc 'shop'")
-    db.add_follow(body.kind, body.key.strip(), body.name)
+    key = body.key.strip()
+    if body.kind == "shop":     # dán cả link shop -> chỉ lấy tên miền (giống cách lưu QC: chữ thường, bỏ www.)
+        key = re.sub(r"^[a-z]+://", "", key.lower()).split("/")[0].split("?")[0].removeprefix("www.")
+        if not key:
+            raise HTTPException(400, "Tên shop không hợp lệ")
+    db.add_follow(body.kind, key, body.name if body.kind == "page" else (body.name or key))
     return {"ok": True}
 
 
@@ -712,7 +733,7 @@ def scan_follow(kind: str, key: str, country: str = config.DEFAULT_COUNTRY):
     f = next((f for f in db.list_follows() if f["kind"] == kind and f["key"] == key), None)
     if not f:
         raise HTTPException(404)
-    jobs.submit("follow", f"Theo dõi {kind} {f['name'] or key}", jobs.follow_job(kind, key, country))
+    jobs.submit("follow", jobs.follow_title(kind, key, f["name"]), jobs.follow_job(kind, key, country))
     return {"ok": True}
 
 
@@ -734,7 +755,7 @@ def dig(cid: str, country: str = config.DEFAULT_COUNTRY):
     v = db.get_video(cid)
     if not v:
         raise HTTPException(404)
-    jobs.submit("dig", f"Đào sâu '{v['title'][:40]}'", jobs.dig_job(cid, country))
+    jobs.submit("dig", f"Đào sâu '{v['title'][:40]}' #{cid}", jobs.dig_job(cid, country))
     return {"ok": True}
 
 
