@@ -3,6 +3,8 @@ import os
 import sys
 from pathlib import Path
 
+VERSION = "2.0.0"              # bản final; tiện ích Chrome dùng cùng số (manifest.json)
+
 ROOT = Path(__file__).resolve().parent.parent
 # Bản cài đặt (.exe) nằm trong Program Files, không ghi được -> lưu dữ liệu vào %LOCALAPPDATA%\SnakemediaPOD
 FROZEN = getattr(sys, "frozen", False)

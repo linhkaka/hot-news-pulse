@@ -180,3 +180,4 @@ code.copy{display:block;flex:1;padding:8px 10px;white-space:normal;word-break:br
 .field input{display:block;width:100%;max-width:460px;margin-top:4px;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font:inherit;font-weight:400}
 .steps a{color:var(--blue);text-decoration:underline}
 .grid+.cards{margin-top:16px}
+.ver{font-size:11px;opacity:.55;padding:14px 18px 6px}

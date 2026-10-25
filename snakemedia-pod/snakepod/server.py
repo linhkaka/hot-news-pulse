@@ -631,7 +631,7 @@ def import_data(body: dict):
 def info():
     with db.connect() as conn:
         has = conn.execute("SELECT (SELECT COUNT(*) FROM ads) + (SELECT COUNT(*) FROM social_videos)").fetchone()[0]
-    return {"app": True, "demo": False, "has_data": bool(has)}
+    return {"app": True, "version": config.VERSION, "demo": False, "has_data": bool(has)}
 
 
 # ---- từ khoá tự quét + lịch ----

@@ -190,8 +190,9 @@ function fbCard(v, i = 0) {
   const before = v.page_old && v.first_ts && v.landing_created_ts ? Math.round((v.first_ts - v.landing_created_ts) / 86400) : null;
   const shop = v.landing_age_days == null ? `<div class="note">Trang bán chưa rõ tuổi</div>`
     : `<div class="note ${before ? "red" : ""}">Trang bán ${days(v.landing_age_days)}${v.landing_date_source && v.landing_date_source !== "api" ? "*" : ""}${before ? ` · cũ hơn video ${before} ngày` : ""}</div>`;
-  const kws = v.keywords || [];
-  const why = kws.length ? `Vì bạn tìm "${esc(kws[0])}"${kws.length > 1 ? ` +${kws.length - 1}` : ""}` : "Từ đào sâu / soi store / theo dõi";
+  const kws = (v.keywords || []).filter(k => k !== "demo");
+  const why = kws.length ? `Vì bạn tìm "${esc(kws[0])}"${kws.length > 1 ? ` +${kws.length - 1}` : ""}`
+    : (v.keywords || []).length ? "Dữ liệu mẫu" : "Từ đào sâu / soi store / theo dõi";
   const stat = (n, name, c = "") => `<div><b class="${c}">${n}</b><small>${name}</small></div>`;
   const chips = (v.potential && v.label !== "sap_win" ? `<span class="chip g gchip">🌱 Tiềm năng</span>` : `<span class="chip ${cls} gchip">${ln}</span>`)
     + `<span class="rank">#${pageOffset + i + 1}</span>`;
@@ -1198,3 +1199,4 @@ document.addEventListener("click", e => {
 });
 
 render(); pollJobs();
+api("/api/info").then(i => { $("#ver").textContent = `SNAKEMEDIA POD v${i.version}`; }).catch(() => {});
