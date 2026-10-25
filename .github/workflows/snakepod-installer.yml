@@ -1,0 +1,83 @@
+name: SNAKEMEDIA POD installer
+
+on:
+  pull_request:
+    paths: ["snakemedia-pod/**", ".github/workflows/snakepod-installer.yml"]
+  push:
+    branches: [main]
+    paths: ["snakemedia-pod/**", ".github/workflows/snakepod-installer.yml"]
+    tags: ["snakepod-v*"]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Phát hành bản này lên Releases (vd 2.0.0); để trống = chỉ build"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: snakemedia-pod
+    env:
+      PLAYWRIGHT_BROWSERS_PATH: "0"   # Chromium tải vào trong gói playwright để PyInstaller đóng gói kèm
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+          python -m playwright install --no-shell chromium
+
+      - name: Run tests (including a real Chromium scan of a fake Ad Library)
+        env:
+          SNAKEPOD_E2E: "1"
+          SNAKEPOD_NO_TOAST: "1"
+        run: python -m pytest -v
+
+      - name: Build SnakemediaPOD.exe
+        run: pyinstaller --noconfirm packaging/snakepod.spec
+
+      - name: Self-test the packaged app
+        run: |
+          dist\SnakemediaPOD\SnakemediaPOD.exe --selftest
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Try a Windows notification (informational)
+        continue-on-error: true
+        run: python -c "from snakepod import notify; print('toast shown:', notify.windows_toast('SNAKEMEDIA POD', 'CI test'))"
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            choco install innosetup -y --no-progress
+            $env:PATH += ";${env:ProgramFiles(x86)}\Inno Setup 6"
+          }
+          $version = if ("${{ inputs.release }}") { "${{ inputs.release }}" } elseif ($env:GITHUB_REF -like "refs/tags/snakepod-v*") { $env:GITHUB_REF_NAME -replace '^snakepod-v','' } else { "0.0.${{ github.run_number }}" }
+          iscc "/DAppVersion=$version" packaging\snakepod.iss
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SnakemediaPOD-Setup
+          path: snakemedia-pod/Output/SnakemediaPOD-Setup.exe
+
+      - name: Publish release
+        if: startsWith(github.ref, 'refs/tags/snakepod-v') || inputs.release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release && format('snakepod-v{0}', inputs.release) || github.ref_name }}
+          name: ${{ inputs.release && format('SNAKEMEDIA POD {0}', inputs.release) || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          files: snakemedia-pod/Output/SnakemediaPOD-Setup.exe

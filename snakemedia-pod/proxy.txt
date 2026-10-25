@@ -1,0 +1,3 @@
+# Proxy cho tool (tuy chon). Xoa dau # o 1 dong ben duoi va dien proxy cua ban:
+# http://user:pass@1.2.3.4:8080
+# socks5://1.2.3.4:1080

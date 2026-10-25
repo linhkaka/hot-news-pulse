@@ -1,0 +1,59 @@
+name: SNAKEMEDIA POD Chrome extension
+
+on:
+  pull_request:
+    paths: ["snakemedia-chrome/**", "snakemedia-pod/snakepod/**", ".github/workflows/snakepod-chrome.yml"]
+  push:
+    branches: [main]
+    paths: ["snakemedia-chrome/**", "snakemedia-pod/snakepod/**", ".github/workflows/snakepod-chrome.yml"]
+    tags: ["snakepod-v*"]
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Phát hành bản này lên Releases (vd 2.0.0); để trống = chỉ build"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  extension:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r snakemedia-pod/requirements.txt
+          python -m playwright install --with-deps chromium
+
+      - name: Run extension tests (real Chromium, fake Facebook/TikTok, parity with the Python app)
+        working-directory: snakemedia-chrome
+        run: python -m pytest -v
+
+      - name: Package extension
+        run: |
+          mkdir -p dist/SnakemediaPOD-Chrome
+          cd snakemedia-chrome
+          cp -r manifest.json sw.js lib content icons dashboard.html dashboard.js popup.html popup.js style.css logo.png README.md ../dist/SnakemediaPOD-Chrome/
+          cd ../dist && zip -r SnakemediaPOD-Chrome.zip SnakemediaPOD-Chrome
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SnakemediaPOD-Chrome
+          path: dist/SnakemediaPOD-Chrome
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/snakepod-v') || inputs.release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ inputs.release && format('snakepod-v{0}', inputs.release) || github.ref_name }}
+          name: ${{ inputs.release && format('SNAKEMEDIA POD {0}', inputs.release) || github.ref_name }}
+          target_commitish: ${{ github.sha }}
+          files: dist/SnakemediaPOD-Chrome.zip
