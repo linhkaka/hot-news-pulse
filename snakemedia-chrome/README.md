@@ -48,6 +48,33 @@ Chưa làm được (nói thẳng):
 - **Gợi ý từ Pinterest / Google Trends**: chưa làm.
 - **Kho chung trên máy chủ**: bản này gộp kho bằng file.
 
+## Clone vào Shopify + gợi ý từ khoá Pinterest / Google + tiến độ quét (bản nâng cấp 4)
+
+- **Thẻ video mới** (Tổng quan → *Video nổi bật*, và kiểu xem *Lưới* ở mọi danh sách):
+  - Vòng tròn tuổi video (xanh ≤ 3 ngày, cam ≤ 14 ngày, đỏ già hơn), ngày đăng video và tuổi trang bán.
+  - Trang bán cũ hơn video thì ghi đỏ "cũ hơn video N ngày".
+  - Dòng "Vì bạn tìm '…'": từ khoá đã quét ra video này.
+  - Số Win / Scale / Shop / Fanpage, nút **⧉ Clone** và **📊 Phân tích**.
+- **Kết nối Shopify + nút Clone** (mục *Kết nối Shopify*):
+  - Tự tạo 1 app cho store của bạn trong Shopify Dev Dashboard (khoảng 5 phút, có hướng dẫn từng bước trong Tiện ích), dán Client ID + Client secret.
+  - Store cũ có "custom app": dán Admin API access token (`shpat_…`) vào ô Client secret.
+  - Clone tạo sản phẩm **bản nháp (Draft)** gắn tag `snakemedia-clone`: tên, mô tả, ảnh, biến thể, giá, giá gạch. Không tự đăng bán.
+  - Trang Shopify lấy được đủ biến thể / ảnh; nền tảng khác chỉ lấy tên, ảnh, giá, mô tả ngắn.
+  - Client secret chỉ lưu trên máy bạn (trong hồ sơ Chrome), không gửi đi đâu ngoài Shopify.
+  - **Ảnh / mô tả của shop khác có bản quyền**: sửa lại, làm ảnh riêng trước khi bán.
+- **Gợi ý từ khoá** (Quét từ khoá → 3 tab):
+  - **Pinterest**: từ khoá đang tăng trên Pinterest Trends theo nước, kèm % tăng và danh mục. Tiện ích mở trang trends.pinterest.com bằng cửa sổ quét (có Chế độ an toàn riêng cho Pinterest).
+  - **Google Trends**: tìm kiếm đang thịnh hành theo nước (RSS công khai của Google; nhiều tin tức / thể thao, tự chọn từ liên quan sản phẩm).
+  - **Tự đào**: từ tên sản phẩm / nội dung video hot trong kho.
+  - Mỗi từ ghi "đã quét / chưa quét". Tick nhiều từ → **Quét các từ đã chọn**.
+- **Bảng tiến độ quét** (bên phải trang Quét từ khoá): "Đang quét 3 / 5", việc đang chạy + số QC đã đọc, danh sách việc xong (số QC, thời gian) / đang chờ, tốc độ QC/phút, thời gian còn lại (ước tính) và nút Dừng.
+
+Nói thẳng:
+- Shopify, Pinterest Trends, Google Trends **chưa thử với tài khoản / trang thật** (môi trường phát triển bị chặn), chỉ thử với máy chủ giả.
+- Tên trường dữ liệu của Pinterest Trends được đọc lỏng; Pinterest có thể bắt đăng nhập (Chế độ an toàn → Đăng nhập Pinterest). Ra 0 từ thì gửi gói chẩn đoán.
+- Chưa clone được "trang" (theme / landing page) như SpyWin — chỉ clone sản phẩm.
+- "Đang hot toàn hệ thống" (kho chung trên máy chủ) chưa có: kho vẫn gộp bằng file (Góp kho dữ liệu).
+
 ## Tải ảnh / video QC + video viral theo thị trường (bản nâng cấp 3)
 
 - **Tải video / ảnh của QC**:
@@ -131,7 +158,8 @@ Sửa xong bấm ↻ (Tải lại) ở `chrome://extensions`, rồi vào bảng 
 manifest.json        khai báo tiện ích (Manifest V3)
 sw.js                phần nền: nhận lệnh, hàng đợi quét, lịch tự quét
 lib/                 logic (chuyển từ bản Python): config, db (IndexedDB), fbparser, analyze, landing, pod,
-                     social, safety, notify, diag, scanner (điều khiển cửa sổ quét), jobs, api, demo
+                     social, safety, notify, diag, scanner (điều khiển cửa sổ quét), jobs, api, demo,
+                     media, shopify (Clone), kwtrends (Pinterest / Google Trends)
 content/hook.js      chạy trong trang Facebook/TikTok, sao chép phản hồi API dữ liệu (không sửa, không chặn)
 content/agent.js     chuyển dữ liệu đó về phần nền
 dashboard.*          bảng điều khiển — dashboard.js / style.css là bản sao giao diện của app

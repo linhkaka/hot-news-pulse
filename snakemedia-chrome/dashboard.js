@@ -30,7 +30,7 @@ const act = (name, ...args) => `data-act="${name}" data-args="${esc(JSON.stringi
 const LABEL = {sap_win: ["Sắp WIN", "p"], win: ["Video Win", "g"], scale: ["Video scale", ""], theo_doi: ["Chờ thêm dữ liệu", ""],
   trang_cu: ["Trang bán cũ", "r"], cu: ["Video già", "r"]};
 const TABS = ["potential", "cow", "test", "hidden", "dig"];   // danh sách video lọc theo tab (không theo nhãn)
-const TITLES = {trends: "Xu hướng thị trường", potential: "Video Tiềm Năng", cow: "SP bò sữa", test: "Video test", hidden: "Đã ẩn", dig: "Đào sâu",
+const TITLES = {shopify: "Kết nối Shopify", trends: "Xu hướng thị trường", potential: "Video Tiềm Năng", cow: "SP bò sữa", test: "Video test", hidden: "Đã ẩn", dig: "Đào sâu",
   stores: "Quét store win", history: "Lịch sử quét", data: "Góp kho dữ liệu", notify: "Thông báo", safety: "Chế độ an toàn", viral: "Video viral", spread: "QC Facebook đang lan nhanh", overview: "Tổng quan", scan: "Quét từ khoá", all: "Tất cả video", niches: "Niche POD",
   follows: "Theo dõi đặc biệt", keywords: "Tự quét mỗi đêm", shops: "Kho shop"};
 const DATE_SOURCE = {api: "dữ liệu sản phẩm", uuid: "ước tính từ mã sản phẩm", anh: "ước tính từ ảnh sản phẩm"};
@@ -175,10 +175,38 @@ function gridCard(attrs, img, video, chip, title, meta) {
     <div class="gbody"><div class="gt">${esc(title)}</div><div class="m">${meta}</div></div></div>`;
 }
 
-function fbCard(v) {
+// Vòng tuổi video: càng mới vòng càng đầy (30 ngày = rỗng); xanh ≤ 3 ngày, cam ≤ 14 ngày, đỏ già hơn
+function ageRing(d) {
+  const n = d == null ? "?" : Math.round(d);
+  const fill = d == null ? 0 : Math.max(0.05, 1 - Math.min(d, 30) / 30);
+  const cls = d == null ? "" : d <= 3 ? "g" : d <= 14 ? "o" : "r";
+  return `<div class="ring ${cls}" style="--p:${fill.toFixed(2)}"><b>${n}</b><small>ngày</small></div>`;
+}
+
+// Thẻ video kiểu lưới: tuổi video, tuổi trang bán, lý do có trong kho, Win / Scale / Shop / Fanpage, nút Clone + Phân tích
+function fbCard(v, i = 0) {
   const [ln, cls] = LABEL[v.label] || [v.label, ""];
-  return gridCard(`data-cid="${esc(v.cid)}"`, thumb(v), v.video_url, `<span class="chip ${cls} gchip">${ln}</span>`, v.title,
-    `${v.price ? "$" + esc(v.price) + " · " : ""}video ${days(v.video_age_days)} · ${v.shops_active}/${v.shops_total} shop · ${v.ads_per_day} QC/ngày${podChips(v)}`);
+  const b = v.buckets || {win: 0, scale: 0};
+  const before = v.page_old && v.first_ts && v.landing_created_ts ? Math.round((v.first_ts - v.landing_created_ts) / 86400) : null;
+  const shop = v.landing_age_days == null ? `<div class="note">Trang bán chưa rõ tuổi</div>`
+    : `<div class="note ${before ? "red" : ""}">Trang bán ${days(v.landing_age_days)}${v.landing_date_source && v.landing_date_source !== "api" ? "*" : ""}${before ? ` · cũ hơn video ${before} ngày` : ""}</div>`;
+  const kws = v.keywords || [];
+  const why = kws.length ? `Vì bạn tìm "${esc(kws[0])}"${kws.length > 1 ? ` +${kws.length - 1}` : ""}` : "Từ đào sâu / soi store / theo dõi";
+  const stat = (n, name, c = "") => `<div><b class="${c}">${n}</b><small>${name}</small></div>`;
+  const chips = (v.potential && v.label !== "sap_win" ? `<span class="chip g gchip">🌱 Tiềm năng</span>` : `<span class="chip ${cls} gchip">${ln}</span>`)
+    + `<span class="rank">#${pageOffset + i + 1}</span>`;
+  return `<div class="gcard vcard" data-cid="${esc(v.cid)}" ${v.video_url ? `data-video="${esc(v.video_url)}"` : ""}>
+    <div class="gimg">${thumb(v) ? `<img loading="lazy" src="${esc(thumb(v))}">` : ""}${chips}${v.video_url ? `<span class="play">▶</span>` : ""}</div>
+    <div class="gbody">
+      <div class="age">${ageRing(v.video_age_days)}<div><b>Video đăng ${dm(v.first_ts)}</b>${shop}</div></div>
+      <div class="why">${why}</div>
+      <div class="gt">${esc(v.title)}</div>
+      <div class="note dom">${esc(v.domain || (v.shops || [])[0] || "")}${v.price ? " · $" + esc(v.price) : ""}</div>
+      <div class="stats">${stat(b.win, "Win", "green")}${stat(b.scale, "Scale")}${stat(`${v.shops_active}<small>/${v.shops_total}</small>`, "Shop")}${stat(v.pages_active, "Fanpage")}</div>
+      <div class="cbtns">${v.clone ? `<a class="btn small" target="_blank" rel="noopener" href="${esc(v.clone.admin_url)}" title="Đã clone ${ago(v.clone.ts)}">✓ Đã clone</a>`
+        : `<button class="small primary" ${act("cloneVideo", v.cid)}>⧉ Clone</button>`}
+        <button class="small" ${act("openDrawer", v.cid)}>📊 Phân tích</button></div>
+    </div></div>`;
 }
 
 function wrapItems(items, rowFn, cardFn, tableFn = null, lay = layout) {
@@ -394,17 +422,18 @@ async function openSocial(vid) {
 
 // ---------------- Chế độ an toàn ----------------
 
-const SITE = {facebook: "facebook", tiktok: "tiktok"};
+const SITE = {facebook: "facebook", tiktok: "tiktok", pinterest: "pinterest"};
+const PNAME = {facebook: "Facebook", tiktok: "TikTok", pinterest: "Pinterest"};
 
 function renderAlert(blocked) {
   const keys = Object.keys(blocked || {});
   $("#cnt-safety").textContent = keys.length ? "!" : "";
-  $("#pills").innerHTML = ["facebook", "tiktok"].map(p => `<span class="pill ${blocked[p] ? "bad" : ""}" ${act("goSafety")}
-    title="${blocked[p] ? esc(blocked[p].reason) : "Đang quét bình thường"}"><i></i>${p === "facebook" ? "Facebook" : "TikTok"}</span>`).join("");
+  $("#pills").innerHTML = ["facebook", "tiktok", ...(blocked.pinterest ? ["pinterest"] : [])].map(p => `<span class="pill ${blocked[p] ? "bad" : ""}" ${act("goSafety")}
+    title="${blocked[p] ? esc(blocked[p].reason) : "Đang quét bình thường"}"><i></i>${PNAME[p]}</span>`).join("");
   $("#alert").innerHTML = keys.map(p => `<div class="alert"><div>⚠️</div><div>
       <b>${esc(blocked[p].reason)}</b> <span class="note">(${ago(blocked[p].ts)})</span><br>
-      ${NOUN} đã <b>tạm dừng mọi lượt quét ${p === "facebook" ? "Facebook" : "TikTok"}</b> để bảo vệ tài khoản.
-      Bấm "Mở trang để xác minh", tự làm theo hướng dẫn của ${p === "facebook" ? "Facebook" : "TikTok"},
+      ${NOUN} đã <b>tạm dừng mọi lượt quét ${PNAME[p] || p}</b> để bảo vệ tài khoản.
+      Bấm "Mở trang để xác minh", tự làm theo hướng dẫn của ${PNAME[p] || p},
       đóng tab, nên đợi vài tiếng rồi bấm "Đã xử lý, quét tiếp".</div>
       <div class="acts"><button class="small" ${act("openLogin", SITE[p])}>Mở trang để xác minh</button>
       <button class="small primary" ${act("resumePlatform", p)}>Đã xử lý, quét tiếp</button></div></div>`).join("");
@@ -494,8 +523,8 @@ async function removeViralKw(platform, keyword, country) {
 }
 
 async function renderOverview() {
-  const [s, auto, niches, vir, info] = await Promise.all([refreshCounts(), api("/api/autoscan"), api("/api/niches"),
-    api("/api/viral").catch(() => ({counts: {}})), api("/api/info")]);
+  const [s, auto, niches, vir, info, hot] = await Promise.all([refreshCounts(), api("/api/autoscan"), api("/api/niches"),
+    api("/api/viral").catch(() => ({counts: {}})), api("/api/info"), api("/api/videos?tab=hot&limit=10").catch(() => ({items: []}))]);
   const welcome = info.has_data ? (info.demo ? `<div class="card" style="margin-bottom:14px">Đang xem <b>dữ liệu mẫu</b>.
       Lượt quét thật đầu tiên sẽ tự xoá dữ liệu mẫu. <a ${act("setView", "scan")}><b>Quét từ khoá →</b></a></div>` : "")
     : `<div class="card" style="margin-bottom:14px"><b style="font-size:16px">Chào mừng tới SNAKEMEDIA POD 🐍</b>
@@ -508,7 +537,11 @@ async function renderOverview() {
   const topN = niches.filter(n => n.sap_win + n.win + n.scale).slice(0, 6);
   const tb = s.tabs || {};
   const tabCard = (key, icon, name, n, sub) => `<a class="card" ${act("setView", key)}><div class="big">${n || 0}</div>${icon} ${name}<div class="note">${sub}</div></a>`;
-  return welcome + `<div class="cards">${cards}</div>
+  const hotGrid = hot.items.length ? `<div class="toolbar" style="margin:0 0 8px"><b style="font-size:15px">Video nổi bật</b>
+      <span class="note">— Sắp WIN / Win / Scale / Tiềm năng, video mới nhất trước</span>
+      <a class="small" style="margin-left:auto" ${act("setView", "potential")}>Xem thêm →</a></div>
+    <div class="grid">${hot.items.map((v, i) => fbCard(v, i)).join("")}</div>` : "";
+  return welcome + hotGrid + `<div class="cards">${cards}</div>
     <div class="cards">
       ${tabCard("potential", "🌱", "Video Tiềm Năng", tb.potential, "vừa nhú, chưa chín")}
       ${tabCard("cow", "🐄", "SP bò sữa", tb.cow, "chạy đều nhiều tuần")}
@@ -548,22 +581,21 @@ function scansTable(scans) {
 }
 
 async function renderScan() {
-  const [scans, passive, sug] = await Promise.all([api("/api/scans"),
-    IS_EXT ? api("/api/passive") : Promise.resolve(null), api("/api/keywords/suggest").catch(() => [])]);
-  return `<form class="scan" id="scanForm">
+  const [scans, passive, jobs] = await Promise.all([api("/api/scans"),
+    IS_EXT ? api("/api/passive") : Promise.resolve(null), api("/api/jobs")]);
+  const left = `<form class="scan" id="scanForm">
       <input name="keyword" placeholder="Từ khoá, vd: personalized dog shirt, nurse mug…" required>
       <input name="country" value="US" size="3" title="Mã quốc gia">
       <input name="max_ads" type="number" value="300" style="width:90px" title="Số QC tối đa">
       <label class="note"><input type="checkbox" name="save" checked> Lưu để tự quét mỗi đêm</label>
       <button class="primary">Quét</button></form>
+    <div class="card" style="margin:0 0 12px" id="kwBox">${await kwSuggestBox()}</div>
     <form class="card" id="batchForm" style="margin:0 0 12px">
-      <b>Quét hàng loạt</b> <span class="note">— mỗi dòng 1 từ khoá, tool xếp hàng quét lần lượt (có nghỉ an toàn giữa các lượt)</span>
+      <b>Quét hàng loạt</b> <span class="note">— mỗi dòng 1 từ khoá, ${NOUN.toLowerCase()} xếp hàng quét lần lượt (có nghỉ an toàn giữa các lượt)</span>
       <textarea name="keywords" rows="4" placeholder="lawn mower&#10;garden ideas&#10;dog mom shirt" style="width:100%;margin:8px 0"></textarea>
       <div class="toolbar" style="margin:0"><input name="country" value="US" size="3" title="Quốc gia">
         <label class="note"><input type="checkbox" name="save" checked> Lưu để tự quét mỗi đêm</label>
         <button class="primary small">Xếp hàng quét</button></div></form>
-    ${sug.length ? `<div class="note">Tự đào từ khoá — lấy từ tên sản phẩm / nội dung các video đang hot mà bạn chưa quét (bấm để thêm vào danh sách quét hàng loạt):</div>
-      <div class="chips">${sug.map(k => `<span class="chip g" ${act("addKw", k.keyword)} title="${esc(k.source)} · ${k.videos} video">${esc(k.keyword)} <small>${k.videos}</small></span>`).join("")}</div>` : ""}
     <div class="note">Gợi ý từ khoá POD (bấm để điền):</div>
     <div class="chips">${POD_KEYWORDS.map(k => `<span class="chip" ${act("fillKw", k)}>${esc(k)}</span>`).join("")}</div>
     <p class="note">${IS_EXT ? `Tiện ích mở 1 cửa sổ Chrome, vào Thư viện quảng cáo Facebook, cuộn và đọc QC video (cả QC đã tắt).
@@ -573,8 +605,141 @@ async function renderScan() {
     ${passive ? `<div class="card" style="margin:12px 0"><label class="check"><input type="checkbox" data-change="passive" ${passive.enabled ? "checked" : ""}>
       <b>Tự lưu khi lướt</b></label>
       <p class="note" style="margin:4px 0 0">Khi bạn tự mở Thư viện quảng cáo Facebook, TikTok hoặc TikTok Creative Center trên Chrome,
-      tiện ích lưu luôn các QC / video bạn lướt qua (không tính vào giới hạn quét, không tự cuộn).</p></div>` : ""}
-    ${scansTable(scans)}`;
+      tiện ích lưu luôn các QC / video bạn lướt qua (không tính vào giới hạn quét, không tự cuộn).</p></div>` : ""}`;
+  return `<div class="split"><div>${left}</div><aside><div class="card" id="progress">${progressPanel(jobs.progress)}</div></aside></div>
+    <h3>Lượt quét gần đây</h3>${scansTable(scans)}`;
+}
+
+// ---------------- gợi ý từ khoá: Pinterest / Google Trends / Tự đào ----------------
+
+let kwTab = "pinterest", kwMarket = "US";
+const KW_TABS = {pinterest: "Pinterest", google: "Google Trends", auto: "Tự đào"};
+const KW_NOTES = {
+  pinterest: "Từ khoá đang tăng trên Pinterest Trends, xếp theo % tăng. Người dùng Pinterest lên kế hoạch mua trước vài tuần — hợp để đón mùa sale.",
+  google: "Tìm kiếm đang thịnh hành trên Google (RSS công khai của Google Trends): nhiều tin tức / thể thao, chọn những từ liên quan sản phẩm.",
+  auto: "Lấy từ tên sản phẩm / nội dung các video đang hot trong kho mà bạn chưa quét.",
+};
+
+async function kwSuggestBox() {
+  const tabs = `<div class="seg kwtabs">${Object.entries(KW_TABS).map(([k, n]) => `<button class="small ${kwTab === k ? "on" : ""}" ${act("kwTab", k)}>${n}</button>`).join("")}</div>`;
+  let rows = [], head = "", foot = "";
+  if (kwTab === "auto") {
+    const sug = await api("/api/keywords/suggest").catch(() => []);
+    rows = sug.map(k => ({term: k.keyword, info: `${k.source} · ${k.videos} video`, metric: `${k.videos} video`, scanned: false}));
+  } else {
+    const [r, mk] = await Promise.all([api(`/api/kwtrends?source=${kwTab}&market=${kwMarket}`), getMarkets()]);
+    rows = r.items.map(it => ({term: it.term, info: [it.group, it.info].filter(Boolean).join(" · "), scanned: it.scanned,
+      metric: it.growth != null ? `<b class="chip ${it.growth > 0 ? "o" : ""}">${it.growth > 0 ? "+" : ""}${it.growth}%</b>` : it.score ? num(it.score) : ""}));
+    head = `<div class="toolbar" style="margin:6px 0">
+      <select data-change="kwMarket">${Object.entries(mk.markets).map(([c, n]) => `<option value="${c}" ${c === kwMarket ? "selected" : ""}>${c} · ${esc(n)}</option>`).join("")}</select>
+      <button class="small" ${act("refreshKwTrends")}>↻ Lấy mới</button>
+      <span class="note">${r.ts ? `${r.items.length} từ · ${r.unscanned} chưa quét · lấy ${ago(r.ts)}` : "Chưa lấy lần nào — bấm Lấy mới"}</span></div>`;
+    if (kwTab === "pinterest") foot = `<p class="note">Pinterest Trends: ${NOUN.toLowerCase()} mở trang trends.pinterest.com bằng ${IS_EXT ? "cửa sổ Chrome" : "trình duyệt quét"} và đọc dữ liệu của trang
+      (thử nghiệm — Pinterest có thể bắt đăng nhập: mục Chế độ an toàn → Đăng nhập Pinterest). Ra 0 từ thì gửi gói chẩn đoán.</p>`;
+  }
+  const list = rows.length ? `<div class="kwlist"><table>
+      <tr><th><input type="checkbox" ${act("toggleAllKw")} title="Chọn tất cả từ chưa quét"></th><th>Từ khoá</th><th class="num">${kwTab === "pinterest" ? "Tăng" : kwTab === "google" ? "Lượt tìm" : ""}</th><th></th></tr>
+      ${rows.map(r => `<tr class="${r.scanned ? "dim" : ""}"><td><input type="checkbox" class="kwpick" value="${esc(r.term)}"></td>
+        <td>${esc(r.term)}${r.info ? `<br><small class="note">${esc(r.info)}</small>` : ""}</td><td class="num">${r.metric}</td>
+        <td class="num"><small class="note">${r.scanned ? "đã quét" : "chưa quét"}</small></td></tr>`).join("")}</table></div>
+      <div class="toolbar" style="margin:8px 0 0"><button class="primary small" ${act("scanSelected")}>Quét các từ đã chọn</button>
+        <label class="note"><input type="checkbox" id="kwSave" checked> Lưu để tự quét mỗi đêm</label></div>`
+    : `<div class="note" style="padding:10px 0">${kwTab === "auto" ? "Chưa có gợi ý — cần vài video hot trong kho trước." : "Chưa có dữ liệu."}</div>`;
+  return `<b>Gợi ý từ khoá</b> ${tabs}<p class="note" style="margin:6px 0 0">${KW_NOTES[kwTab]}</p>${head}${list}${foot}`;
+}
+
+async function refreshKwTrends() {
+  const r = await post("/api/kwtrends/refresh", {source: kwTab, countries: [kwMarket]});
+  pollJobs();
+  if (!r.queued) alert("Đang lấy rồi, chờ chút nhé.");
+}
+
+function toggleAllKw() {
+  const boxes = [...document.querySelectorAll(".kwpick")];
+  const on = !boxes.some(b => b.checked);
+  boxes.forEach(b => { b.checked = on && !b.closest("tr").classList.contains("dim"); });
+}
+
+async function scanSelected() {
+  const keywords = [...document.querySelectorAll(".kwpick:checked")].map(b => b.value);
+  if (!keywords.length) return alert("Chọn ít nhất 1 từ khoá");
+  const r = await post("/api/scan", {keywords, country: kwTab === "auto" ? "US" : kwMarket, max_ads: 300, save: !!($("#kwSave") || {}).checked});
+  pollJobs(); alert(`Đã xếp ${r.queued} từ khoá vào hàng quét.`); render();
+}
+
+// ---------------- bảng tiến độ quét ----------------
+
+const fmtDur = s => s == null ? "?" : s < 60 ? `${s} giây` : s < 3600 ? `${Math.round(s / 60)} phút` : `${Math.floor(s / 3600)} giờ ${Math.round(s % 3600 / 60)} phút`;
+const ST = {xong: ["", "g"], "da dung": ["đã dừng", ""], "bo qua": ["bỏ qua", "o"], checkpoint: ["checkpoint", "r"], loi: ["lỗi", "r"]};
+
+function progressPanel(p) {
+  if (!p || !p.total) return `<b>Tiến độ quét</b><p class="note">Chưa có lượt quét nào đang chạy. Chọn từ khoá bên trái rồi bấm Quét —
+    ${NOUN.toLowerCase()} xếp hàng và quét lần lượt, có nghỉ an toàn giữa các lượt.</p>`;
+  const c = p.current, n = p.n_done + (c ? 1 : 0);
+  const line = (dot, title, right) => `<div class="pline"><i class="dot ${dot}"></i><span>${esc(title)}</span><small class="note">${right}</small></div>`;
+  return `<div class="toolbar" style="margin:0"><b>${c ? `Đang quét · ${n} / ${p.total}` : `Xong ${p.n_done} / ${p.total}`}</b>
+      ${c ? `<button class="small danger" style="margin-left:auto" ${act("stopJobs")}>Dừng</button>` : ""}</div>
+    ${c ? `<div class="pcur"><span class="spin"></span><div><b>${esc(c.title)}</b><div class="note">${c.count} đã đọc · chạy ${fmtDur(c.secs)}</div></div></div>` : ""}
+    <div class="plist">${p.done.slice().reverse().map(d => line(ST[d.status] ? ST[d.status][1] : "", d.title,
+        (d.status === "xong" ? `${d.n}` : ST[d.status] ? ST[d.status][0] : d.status) + ` · ${fmtDur(d.secs)}`)).join("")}
+      ${p.pending.slice(0, 12).map(t => line("w", t, "chờ")).join("")}${p.pending.length > 12 ? `<div class="note">… +${p.pending.length - 12} việc chờ</div>` : ""}</div>
+    <div class="pfoot"><div><b>${p.rate != null ? `~${p.rate}` : "—"}</b><small>QC / phút</small></div>
+      <div><b>${p.items}</b><small>đã đọc phiên này</small></div>
+      <div><b>${c || p.pending.length ? fmtDur(p.eta_s) : "xong"}</b><small>còn lại (ước tính)</small></div></div>
+    <p class="note" style="margin:8px 0 0">Có thể đóng ${IS_EXT ? "trang này" : "cửa sổ trình duyệt"} — ${NOUN.toLowerCase()} vẫn quét tiếp${IS_EXT ? " (giữ Chrome mở)" : ""}. Thời gian còn lại tính theo các việc đã xong, gồm cả thời gian nghỉ an toàn.</p>`;
+}
+
+// ---------------- Kết nối Shopify + Clone ----------------
+
+async function renderShopify() {
+  const s = await api("/api/shopify");
+  const scopes = s.scopes;
+  return `<div class="card" style="max-width:820px">
+    ${s.connected ? `<div class="toolbar" style="margin:0 0 8px"><span class="chip g">Đã kết nối</span><b>${esc(s.name)}</b>
+      <span class="note">${esc(s.shop)}${s.currency ? " · " + esc(s.currency) : ""} · đã clone ${s.clones} sản phẩm</span>
+      <button class="small" style="margin-left:auto" ${act("disconnectShopify")}>Ngắt kết nối</button></div>` : ""}
+    <p class="note">Kết nối 1 lần để nút <b>⧉ Clone</b> đưa sản phẩm của trang bán (tên, mô tả, ảnh, biến thể, giá, giá gạch) vào store của bạn
+    dưới dạng <b>bản nháp (Draft)</b> — không tự đăng bán. Bạn tự tạo 1 app riêng cho store mình trong Shopify, khoảng 5 phút.
+    App chỉ dùng được trên store của bạn và bạn xoá được bất cứ lúc nào.</p>
+    <ol class="steps">
+      <li>Mở <a target="_blank" rel="noopener" href="https://dev.shopify.com/dashboard">dev.shopify.com/dashboard</a> bằng tài khoản Shopify đang sở hữu store
+        → <b>Apps</b> → <b>Create app</b> → <b>Create app manually</b>.</li>
+      <li>Điền <b>App name</b> (vd "SNAKEMEDIA Clone"), <b>App URL</b> điền <code>https://example.com</code>, ô <b>Scopes</b> dán:
+        <div class="toolbar"><code class="copy">${esc(scopes)}</code><button type="button" class="small" ${act("copyText", scopes)}>Sao chép</button></div>
+        Bấm <b>Create app</b>, rồi bấm <b>Release</b> ở hộp hiện ra.</li>
+      <li>Ở trang <b>Overview</b> của app → <b>Install app</b> → chọn store của bạn → <b>Install</b>.</li>
+      <li>Vẫn ở <b>Overview</b>, mục <b>Credentials</b> → sao chép <b>Client ID</b> và <b>Client secret</b>.</li>
+      <li>Dán vào đây cùng tên store dạng <code>ten-store.myshopify.com</code> (Shopify admin → Settings → Domains).</li>
+    </ol>
+    <form id="shopifyForm">
+      <label class="field">Tên store<input name="shop" placeholder="ten-store.myshopify.com" value="${esc(s.shop || "")}" required></label>
+      <label class="field">Client ID<input name="client_id" value="${esc(s.client_id || "")}" autocomplete="off"></label>
+      <label class="field">Client secret<input name="client_secret" type="password" autocomplete="off"
+        placeholder="${s.secret_masked ? "Đã lưu (" + esc(s.secret_masked) + ") — để trống nếu không đổi" : ""}"></label>
+      <p class="note">Client secret chỉ lưu trên ${IS_EXT ? "máy bạn (trong hồ sơ Chrome)" : "máy bạn (file dữ liệu của tool)"}, không gửi đi đâu ngoài Shopify.
+      Store cũ dùng "custom app" trong Shopify admin? Dán <b>Admin API access token</b> (<code>shpat_…</code>) vào ô Client secret, để trống Client ID.</p>
+      <button class="primary">${s.connected ? "Lưu & kết nối lại" : "Kết nối"}</button>
+    </form></div>
+    <div class="card" style="max-width:820px;margin-top:12px"><b>Lưu ý khi clone</b>
+      <ul class="tips"><li>Ảnh và mô tả của shop khác có bản quyền: sửa lại mô tả, chụp / làm ảnh riêng trước khi bán.</li>
+      <li>Sản phẩm vào store ở trạng thái <b>Draft</b> với tag <code>snakemedia-clone</code>; tự đặt giá, tồn kho, vận chuyển rồi mới bật bán.</li>
+      <li>Trang Shopify clone được đủ biến thể / ảnh. Nền tảng khác chỉ lấy được tên, 1–vài ảnh, giá và mô tả ngắn.</li></ul></div>`;
+}
+
+async function cloneVideo(cid, url) {
+  const st = await api("/api/shopify");
+  if (!st.connected) { if (confirm("Chưa kết nối Shopify. Mở trang Kết nối Shopify?")) setView("shopify"); return; }
+  if (!confirm(`Clone sản phẩm${url ? " từ " + url.replace(/^https?:\/\//, "").slice(0, 60) : ""} vào store ${st.name} (bản nháp)?`)) return;
+  try {
+    const r = await post("/api/shopify/clone", {cid, url: url || null});
+    if (confirm(`Đã tạo bản nháp "${r.title}" (${r.variants} biến thể, ${r.images} ảnh). Mở trong Shopify?`)) window.open(r.admin_url, "_blank", "noopener");
+    render(); if (openCid) openDrawer(openCid);
+  } catch (e) { alert("Không clone được: " + e.message); }
+}
+
+async function disconnectShopify() {
+  if (!confirm("Ngắt kết nối Shopify? (Sản phẩm đã clone vẫn nằm trong store)")) return;
+  await del("/api/shopify"); render();
 }
 
 async function renderNiches() {
@@ -730,7 +895,7 @@ async function renderShops() {
       <td class="num ${r.hot ? "green" : ""}">${r.hot}</td><td>${fmtDate(r.first_ts)}</td><td>${fmtDate(r.last_ts)}</td></tr>`).join("")}</table></div>`;
 }
 
-const VIEWS = {trends: renderTrends, stores: renderStores, history: renderHistory, data: renderData,
+const VIEWS = {shopify: renderShopify, trends: renderTrends, stores: renderStores, history: renderHistory, data: renderData,
   potential: () => renderList(null, {tab: "potential"}), cow: () => renderList(null, {tab: "cow"}), test: () => renderList(null, {tab: "test"}),
   hidden: () => renderList(null, {tab: "hidden"}), dig: () => renderList(null, {tab: "dig"}), notify: renderNotify, safety: renderSafety, viral: renderViral, spread: () => renderList(null, {spread: "true"}), overview: renderOverview, scan: renderScan, niches: renderNiches, follows: renderFollows,
   keywords: renderKeywords, shops: renderShops};
@@ -744,8 +909,9 @@ async function render() {
     html = VIEWS[view] ? await VIEWS[view]() : await renderList(view === "all" ? null : view);
   } catch (e) { html = `<div class="empty">Lỗi tải dữ liệu: ${esc(e.message)}</div>`; }
   $("#content").innerHTML = html;
-  document.querySelectorAll(".row[data-cid], .gcard[data-cid], .vrow[data-cid]").forEach(r => r.onclick = () => openDrawer(r.dataset.cid));
-  document.querySelectorAll(".row[data-vid], .gcard[data-vid]").forEach(r => r.onclick = () => openSocial(r.dataset.vid));
+  const own = e => e.target.closest("[data-act], a[href]");   // nút / link bên trong thẻ tự xử lý
+  document.querySelectorAll(".row[data-cid], .gcard[data-cid], .vrow[data-cid]").forEach(r => r.onclick = e => { if (!own(e)) openDrawer(r.dataset.cid); });
+  document.querySelectorAll(".row[data-vid], .gcard[data-vid]").forEach(r => r.onclick = e => { if (!own(e)) openSocial(r.dataset.vid); });
   document.querySelectorAll(".gcard[data-video]").forEach(card => {
     card.onmouseenter = () => {
       const box = card.querySelector(".gimg");
@@ -800,6 +966,10 @@ function bindForms() {
     const r = await post("/api/viral/scan", {platform: "tiktok_tags", countries, period: +d.period, save: !!d.save});
     pollJobs(); alert(`Đã xếp ${r.queued} lượt quét hashtag.`);
   });
+  on("#shopifyForm", async d => {
+    const r = await post("/api/shopify", d);
+    alert(`Đã kết nối store ${r.name}.`); render();
+  });
   on("#autoForm", async d => { await post("/api/autoscan", {enabled: !!d.enabled, hour: +d.hour, stores: +d.stores}); render(); });
   on("#batchForm", async (d, f) => {
     const keywords = d.keywords.split(/\n/).map(x => x.trim()).filter(Boolean);
@@ -846,7 +1016,8 @@ async function openDrawer(cid) {
       <a target="_blank" rel="noopener" href="${esc(pg.url)}">${esc(pg.url.replace(/^https?:\/\/(www\.)?/, ""))}</a></td>
       <td><small class="note">${esc(pg.platform || "")}</small></td>
       <td class="num">${pg.price ? "$" + esc(pg.price) : ""}${pg.compare_price ? ` <s class="note">$${esc(pg.compare_price)}</s>` : ""}</td>
-      <td class="num"><small class="note">${pg.created_ts ? "tạo " + dm(pg.created_ts) : ""}</small></td><td class="num">${pg.ads} QC</td></tr>`).join("")}</table>` : "";
+      <td class="num"><small class="note">${pg.created_ts ? "tạo " + dm(pg.created_ts) : ""}</small></td><td class="num">${pg.ads} QC</td>
+      <td><a ${act("cloneVideo", v.cid, pg.url)} title="Clone trang này vào Shopify của bạn">⧉ Clone</a></td></tr>`).join("")}</table>` : "";
   const sourcing = (v.sourcing || []).length ? `<h3>Tìm nguồn hàng</h3><div>${v.sourcing.map(x =>
     `<a class="btn small" target="_blank" rel="noopener" href="${esc(x.url)}" style="margin:0 6px 6px 0">${esc(x.name)} ↗</a>`).join("")}</div>
     <p class="note" style="margin-top:2px">Tìm theo tên sản phẩm / ảnh để hỏi giá xưởng hoặc bên fulfill của bạn (tool không nhận hoa hồng từ bên nào).</p>` : "";
@@ -862,6 +1033,8 @@ ${tabChips(v)}${digChip}
       ${v.main_link ? `<a class="btn" target="_blank" rel="noopener" href="${esc(v.main_link)}">Mở URL bán ↗</a>` : `<span class="btn">Không có URL bán</span>`}
       <a class="btn" target="_blank" rel="noopener" href="${esc(v.ad_library_url)}">Xem trên Thư viện QC</a>
       <button ${act("dig", v.cid)}>⤓ Đào sâu</button>
+      ${v.clone ? `<a class="btn" target="_blank" rel="noopener" href="${esc(v.clone.admin_url)}">✓ Đã clone · mở Shopify ↗</a>`
+        : `<button class="primary" ${act("cloneVideo", v.cid)} ${v.clone_url ? "" : "disabled"}>⧉ Clone vào Shopify</button>`}
       <button ${act("downloadMedia", "video", v.cid, "video")} ${v.video_url ? "" : "disabled"}>⬇ Tải video</button>
       <button ${act("downloadMedia", "video", v.cid, "image")}>🖼 Tải ảnh</button>
       <button ${act("mark", v.cid, "test", !isTest)}>${isTest ? "✓ Đang test" : "+ Video test"}</button>
@@ -934,6 +1107,8 @@ async function pollJobs() {
     $("#stopBtn").classList.toggle("hidden", !busy);
     renderAlert(s.blocked);
     $("#log").textContent = s.log.map(l => new Date(l.ts * 1000).toLocaleTimeString() + "  " + l.msg).join("\n");
+    const pp = $("#progress");
+    if (pp) pp.innerHTML = progressPanel(s.progress);
     if (wasBusy && !busy) { render(); if (openCid) openDrawer(openCid); if (openVid) openSocial(openVid); }
     wasBusy = busy;
     pollTimer = setTimeout(pollJobs, busy ? 2000 : 8000);
@@ -958,7 +1133,8 @@ const CHANGES = {product_type: el => filterBy("product_type", el.value), niche: 
   viralPlatform: el => { viralFilters.platform = el.value; pageOffset = 0; render(); },
   viralSort: el => { viralFilters.sort = el.value; pageOffset = 0; render(); },
   viralMarket: el => { viralFilters.market = el.value; pageOffset = 0; render(); },
-  passive: el => post("/api/passive", {enabled: el.checked})};
+  passive: el => post("/api/passive", {enabled: el.checked}),
+  kwMarket: el => { kwMarket = el.value; render(); }};
 document.addEventListener("change", e => {
   const el = e.target.closest("[data-change]");
   if (el) CHANGES[el.dataset.change](el);
@@ -1004,14 +1180,16 @@ async function scanTag(name, save) {
   pollJobs(); alert(r.queued ? `Đã xếp quét video #${name}${save ? " (tự quét mỗi đêm)" : ""}.` : "Hashtag này đang chờ quét.");
 }
 
-const ACTIONS = {findChat, downloadDiag, loadDemo, setView, closeDrawer, runAll, clearScope: () => clearScope(),
+const ACTIONS = {cloneVideo, disconnectShopify, kwTab: k => { kwTab = k; render(); }, kwMarket: m => { kwMarket = m; render(); },
+  refreshKwTrends, scanSelected, toggleAllKw, stopJobs: () => post("/api/stop").then(pollJobs), findChat, downloadDiag, loadDemo, setView, closeDrawer, runAll, clearScope: () => clearScope(),
   downloadMedia, batchMedia, scanTag, trendMarket: m => { trendMarket = m; render(); },
   mark, digBatch, sweepStores, sweepOne, exportData, importData,
   storeFilter: k => { storeFilter = k; pageOffset = 0; render(); },
-  addKw: k => { const ta = $("#batchForm [name=keywords]"); ta.value = (ta.value.trim() ? ta.value.trim() + "\n" : "") + k; }, testNotify, clearToken, resumePlatform, openLogin, goSafety: () => setView("safety"), openSocial, removeViralKw, viralFilter: (k, val) => { viralFilters[k] = val; pageOffset = 0; render(); }, setLayout, goPage,
+  testNotify, clearToken, resumePlatform, openLogin, goSafety: () => setView("safety"), openSocial, removeViralKw, viralFilter: (k, val) => { viralFilters[k] = val; pageOffset = 0; render(); }, setLayout, goPage,
   sameProduct: (key) => { filters.product = key; filters.scopeName = "cùng sản phẩm " + key; closeDrawer(); setView("all"); }, showScope, toggleFollow, unfollow, scanFollow, scanKw, removeKw, dig, openDrawer,
   niche: (n, pod) => { filters.niche = n; if (pod) filters.pod = true; closeDrawer(); setView("all"); },
-  fillKw: k => { $("#scanForm [name=keyword]").value = k; }};
+  fillKw: k => { $("#scanForm [name=keyword]").value = k; },
+  copyText: t => navigator.clipboard.writeText(t).then(() => alert("Đã sao chép"), () => prompt("Sao chép:", t))};
 document.addEventListener("click", e => {
   const el = e.target.closest("[data-act]");
   if (!el) return;

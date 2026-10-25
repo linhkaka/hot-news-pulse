@@ -14,6 +14,8 @@ import * as social from "./lib/social.js";
 import * as notify from "./lib/notify.js";
 import * as diag from "./lib/diag.js";
 import * as imagehash from "./lib/imagehash.js";
+import * as shopify from "./lib/shopify.js";
+import * as kwtrends from "./lib/kwtrends.js";
 
 // Gắn bộ bắt dữ liệu vào các trang cần quét (thêm trang giả trên máy khi chạy bài kiểm thử)
 async function registerCapture() {
@@ -72,7 +74,7 @@ chrome.runtime.onMessage.addListener((msg, sender, reply) => {
 });
 
 // Bài kiểm thử gọi các hàm này trực tiếp (service worker không cho import() động)
-self.SP = {C, URLS, db, api, jobs, scanner, analyze, fbparser, landing, pod, safety, social, notify, diag, imagehash, ready,
+self.SP = {C, URLS, db, api, jobs, scanner, analyze, fbparser, landing, pod, safety, social, notify, diag, imagehash, shopify, kwtrends, ready,
   async setDev(dev) {
     await chrome.storage.local.set({dev});
     applyDev(dev);

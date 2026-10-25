@@ -97,3 +97,14 @@ MEDIA_BATCH_MAX = 200          # tối đa số video mỗi lần tải hàng lo
 # của Creative Center. TikTok tìm kiếm thường và Facebook Reels ra kết quả theo tài khoản + IP của bạn.
 MARKETS = {"US": "Mỹ", "GB": "Anh", "CA": "Canada", "AU": "Úc", "DE": "Đức", "FR": "Pháp", "IT": "Ý", "ES": "Tây Ban Nha",
            "NL": "Hà Lan", "JP": "Nhật", "BR": "Brazil", "MX": "Mexico", "VN": "Việt Nam"}
+
+# Kết nối Shopify (nút Clone): đưa sản phẩm của trang bán vào store của bạn dưới dạng NHÁP (Draft)
+SHOPIFY_API_VERSION = "2025-10"
+SHOPIFY_SCOPES = "write_products,read_products"
+SHOPIFY_BASE = os.environ.get("SNAKEPOD_SHOPIFY_BASE") or None   # chỉ dùng khi kiểm thử (máy chủ Shopify giả)
+CLONE_MAX_IMAGES = 20
+CLONE_MAX_VARIANTS = 100
+
+# Gợi ý từ khoá từ xu hướng: Google Trends (RSS tìm kiếm thịnh hành) + Pinterest Trends (mở trang bằng trình duyệt)
+GOOGLE_TRENDS_RSS = os.environ.get("SNAKEPOD_GTRENDS") or "https://trends.google.com/trending/rss?geo={geo}"
+PINTEREST_TRENDS = os.environ.get("SNAKEPOD_PTRENDS") or "https://trends.pinterest.com/?country={geo}"

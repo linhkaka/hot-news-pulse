@@ -567,6 +567,12 @@ def mark_notified(kind, keys):
         conn.executemany("INSERT OR IGNORE INTO notified (kind, key, ts) VALUES (?, ?, ?)", [(kind, k, now) for k in keys])
 
 
+def ad_keywords():
+    """Mọi từ khoá đã quét ra QC (chữ thường)."""
+    with connect() as conn:
+        return {r[0].lower() for r in conn.execute("SELECT DISTINCT keyword FROM ads WHERE keyword IS NOT NULL")}
+
+
 def ads_first_seen_since(column, value, since):
     assert column in ("page_id", "domain")
     with connect() as conn:

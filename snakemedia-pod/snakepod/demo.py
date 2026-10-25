@@ -74,7 +74,19 @@ TRENDS = {  # thị trường -> [(hashtag, lượt xem, số bài)]
 }
 
 
+# Gợi ý từ khoá mẫu: (từ khoá, danh mục, % tăng) của Pinterest Trends; (từ khoá, lượt tìm) của Google Trends
+PIN_TRENDS = [("fireplace decor", "Home decor", 264), ("witch costume", "Costumes & accessories", 96),
+              ("christmas porch decor", "Seasonal & holiday decorations", 77), ("dog mom shirt", "Pet supplies", 76),
+              ("cowboy boots", "Shoes", 56), ("cozy slippers", "Shoes", 54), ("personalized ornament", "Seasonal & holiday decorations", 48)]
+GOOGLE_TRENDS = [("halloween costumes", 500000), ("ugly christmas sweater", 50000), ("heated blanket", 20000)]
+
+
 def _demo_trends(now):
+    db.set_setting("kwtrends", {
+        "pinterest": {"US": {"ts": now - 3600, "items": [{"term": t, "score": g, "growth": g, "info": None, "group": c}
+                                                         for t, c, g in PIN_TRENDS]}},
+        "google": {"US": {"ts": now - 7200, "items": [{"term": t, "score": n, "growth": None, "info": f"{n // 1000}K+ lượt tìm",
+                                                       "group": None} for t, n in GOOGLE_TRENDS]}}})
     for market, tags in TRENDS.items():
         old = [{"name": n, "rank": i + 2 if i % 2 else i + 1} for i, (n, _, _) in enumerate(tags)]
         db.upsert_trends(market, old, now=now - DAY)

@@ -51,6 +51,12 @@ const TRENDS = {  // thị trường -> [[hashtag, lượt xem, số bài]]
   GB: [["dogmum", 21000000, 7300], ["christmasjumper", 18000000, 6200], ["customgifts", 9000000, 2400]],
 };
 
+// Gợi ý từ khoá mẫu: (từ khoá, danh mục, % tăng) của Pinterest Trends; (từ khoá, lượt tìm) của Google Trends
+const PIN_TRENDS = [["fireplace decor", "Home decor", 264], ["witch costume", "Costumes & accessories", 96],
+  ["christmas porch decor", "Seasonal & holiday decorations", 77], ["dog mom shirt", "Pet supplies", 76],
+  ["cowboy boots", "Shoes", 56], ["cozy slippers", "Shoes", 54], ["personalized ornament", "Seasonal & holiday decorations", 48]];
+const GOOGLE_TRENDS = [["halloween costumes", 500000], ["ugly christmas sweater", 50000], ["heated blanket", 20000]];
+
 function rng(seed) {   // mulberry32
   return () => {
     seed = (seed + 0x6D2B79F5) | 0;
@@ -85,6 +91,7 @@ export async function hasRealData() {
 
 async function wipeData() {
   for (const s of DATA_STORES) await db.clear(s);
+  for (const k of ["kwtrends", "clones"]) await db.setSetting(k, {});   // gợi ý từ khoá / sản phẩm đã clone mẫu
 }
 
 // Lần quét thật đầu tiên: xoá dữ liệu mẫu để không lẫn với dữ liệu thật.
@@ -155,6 +162,10 @@ export async function load() {
   await db.addSocialWatch("tiktok", "dog mom shirt", "");
   await db.addSocialWatch("tiktok_ads", "", "US");
   await db.addSocialWatch("tiktok_tags", "", "US");
+  await db.setSetting("kwtrends", {
+    pinterest: {US: {ts: now - 3600, items: PIN_TRENDS.map(([term, group, g]) => ({term, score: g, growth: g, info: null, group}))}},
+    google: {US: {ts: now - 7200, items: GOOGLE_TRENDS.map(([term, n]) => ({term, score: n, growth: null,
+      info: `${Math.floor(n / 1000)}K+ lượt tìm`, group: null}))}}});
   // Hashtag xu hướng theo thị trường (hôm qua -> hôm nay để thấy tăng/giảm hạng) + 1 video thịnh hành ở Anh
   for (const [market, tags] of Object.entries(TRENDS)) {
     await db.upsertTrends(market, tags.map(([name], i) => ({name, rank: i % 2 ? i + 2 : i + 1})), now - DAY);

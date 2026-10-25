@@ -4,7 +4,8 @@
 (() => {
   if (window.__snakepodHook) return;
   window.__snakepodHook = true;
-  const PATTERNS = ["/api/graphql", "/api/search/", "/api/challenge/item_list", "/api/post/item_list", "creative_radar_api"];
+  const PATTERNS = ["/api/graphql", "/api/search/", "/api/challenge/item_list", "/api/post/item_list", "creative_radar_api",
+    "/resource/", "trends.pinterest.com/"];
   const MAX = 5e6;
   const want = u => { try { return PATTERNS.some(p => String(u).includes(p)); } catch { return false; } };
   const emit = (url, text) => {

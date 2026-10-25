@@ -2,7 +2,7 @@
   "manifest_version": 3,
   "name": "SNAKEMEDIA POD",
   "short_name": "SNAKEMEDIA",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Soi sản phẩm POD win từ Thư viện quảng cáo Facebook và video viral TikTok / Reels. Luật rõ ràng, không điểm AI.",
   "minimum_chrome_version": "116",
   "icons": {

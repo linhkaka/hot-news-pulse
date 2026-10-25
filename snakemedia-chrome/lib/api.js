@@ -9,6 +9,8 @@ import * as safety from "./safety.js";
 import * as social from "./social.js";
 import * as demo from "./demo.js";
 import * as media from "./media.js";
+import * as shopify from "./shopify.js";
+import * as kwtrends from "./kwtrends.js";
 
 export class HttpError extends Error {
   constructor(status, detail) { super(detail); this.status = status; }
@@ -89,15 +91,19 @@ route("GET", "/api/stats", async () => {
     total: Object.values(counts).reduce((s, n) => s + n, 0), tabs, scans: await db.listScans(10), now: db.now()};
 });
 
-const TAB_SORTS = {potential: v => [v.ads_new_48h || 0, v.ads_per_day], cow: v => [v.buckets.old, v.ads_per_day]};
+const TAB_SORTS = {potential: v => [v.ads_new_48h || 0, v.ads_per_day], cow: v => [v.buckets.old, v.ads_per_day],
+  // Video nổi bật (Tổng quan): video mới nhất trước, nhiều shop đang chạy trước
+  hot: v => [-(v.video_age_days ?? 9999), v.shops_active]};
 const cmpDesc = (x, y) => { for (let i = 0; i < x.length; i++) if (x[i] !== y[i]) return y[i] - x[i]; return 0; };
 
 // Gắn đánh dấu (Video test / Đã ẩn), lần đào gần nhất và thay đổi so với hôm trước (lịch sử theo dõi).
 async function decorate(items) {
-  const [mk, dug, hist] = await Promise.all([db.marks(), db.digs(), db.history(items.map(v => v.cid), 2)]);
+  const [mk, dug, hist, clones] = await Promise.all([db.marks(), db.digs(), db.history(items.map(v => v.cid), 2),
+    db.getSetting("clones", {})]);
   for (const v of items) {
     v.marks = [...(mk[v.cid] || [])].sort();
     v.dug_ts = dug[v.cid] ?? null;
+    v.clone = clones[v.cid] ?? null;
     const h = hist[v.cid] || [];
     v.delta = h.length >= 2 ? Object.fromEntries(["pages_active", "shops_active", "shops_win", "scale", "urls"].map(k => [k, h[0][k] - h[1][k]])) : null;
   }
@@ -120,6 +126,7 @@ route("GET", "/api/videos", async ({q}) => {
   if (tab === "test") items = items.filter(v => hasMark(mk, v.cid, "test"));
   else if (tab === "potential") items = items.filter(v => v.potential);
   else if (tab === "cow") items = items.filter(v => v.cash_cow);
+  else if (tab === "hot") items = items.filter(v => ["sap_win", "win", "scale"].includes(v.label) || v.potential);
   else if (tab === "dig") items = (await jobs.digCandidates()).map(clean);
   if (tab in TAB_SORTS) items.sort((a, b) => cmpDesc(TAB_SORTS[tab](a), TAB_SORTS[tab](b)));
   if (bool(q, "spread"))   // QC Facebook đang lan nhanh: xếp theo số QC mới 48h
@@ -155,6 +162,7 @@ route("GET", "/api/videos/{cid}", async ({params}) => {
   await decorate([v]);
   v.history = (await db.history([v.cid], C.HISTORY_DAYS))[v.cid];
   v.sourcing = sourcingLinks(v);
+  v.clone_url = cloneUrl(v);
   v.media = {video_url: v.video_url, image_url: v.thumb_url, video_expires_ts: media.linkExpiry(v.video_url),
     video_expired: media.expired(v.video_url), variants: new Set(v.ads.map(a => a.video_url).filter(Boolean)).size};
   return clean(v);
@@ -433,7 +441,7 @@ route("GET", "/api/diag/{name}/download", async ({params}) => {
 
 // Mở Facebook / TikTok trong 1 tab để bạn tự đăng nhập / xác minh checkpoint.
 route("POST", "/api/login/{site}", async ({params}) => {
-  const url = {facebook: `${URLS.FB}/`, tiktok: `${URLS.TIKTOK}/login`}[params.site];
+  const url = {facebook: `${URLS.FB}/`, tiktok: `${URLS.TIKTOK}/login`, pinterest: `${URLS.PINTEREST}/login/`}[params.site];
   need(url, "Not Found", 404);
   await chrome.tabs.create({url});
   return {ok: true};
@@ -521,6 +529,74 @@ route("GET", "/api/shops", async () => {
 // ---------------- việc đang chạy ----------------
 
 route("POST", "/api/recompute", () => { jobs.submit("recompute", "Chấm lại", {}); return {ok: true}; });
+// ---------------- Kết nối Shopify + Clone ----------------
+
+route("GET", "/api/shopify", () => shopify.status());
+
+const shopifyCall = async fn => {
+  try { return await fn(); } catch (e) {
+    if (e instanceof shopify.ShopifyError) throw new HttpError(400, e.message);
+    throw e;
+  }
+};
+
+route("POST", "/api/shopify", ({body}) => shopifyCall(() => shopify.connect(body.shop, body.client_id, body.client_secret)));
+
+route("DELETE", "/api/shopify", async () => { await shopify.disconnect(); return {ok: true}; });
+
+// Trang bán để clone: ưu tiên trang Shopify có nhiều QC nhất, rồi link chính của video
+function cloneUrl(v) {
+  const pages = v.sell_pages || [];
+  const best = pages.find(p => p.platform === "shopify") || pages[0];
+  return (best && best.url) || v.main_link || null;
+}
+
+route("POST", "/api/shopify/clone", async ({body}) => {
+  let url = body.url || null;
+  if (body.cid) {
+    const v = await db.getVideo(body.cid);
+    need(v, "Không tìm thấy video", 404);
+    url = url || cloneUrl(v);
+  }
+  need(url && /^https?:\/\//.test(url), "Video này chưa có trang bán để clone");
+  const rec = await shopifyCall(() => shopify.clone(url, body.cid || null));
+  jobs.log(`Đã clone '${rec.title.slice(0, 60)}' vào store ${rec.shop} (bản nháp)`);
+  return rec;
+});
+
+// ---------------- Gợi ý từ khoá: Pinterest / Google Trends / Tự đào ----------------
+
+route("GET", "/api/kwtrends", async ({q}) => {
+  const source = q.get("source") || "pinterest";
+  need(source in kwtrends.SOURCES, "Not Found", 404);
+  const market = (q.get("market") || C.DEFAULT_COUNTRY).toUpperCase();
+  const data = (await db.getSetting("kwtrends", {}))[source] || {};
+  const cur = data[market] || {ts: null, items: []};
+  const known = await jobs.knownKeywords();
+  const items = cur.items.map(it => ({...it, scanned: known.has(it.term)}));
+  const groups = new Map();
+  for (const it of items) {
+    const name = it.group || "";
+    const g = groups.get(name) || {name, terms: 0, unscanned: 0, best: null};
+    g.terms++;
+    g.unscanned += it.scanned ? 0 : 1;
+    g.best = Math.max(g.best || it.score || 0, it.score || 0);
+    groups.set(name, g);
+  }
+  return {source, market, ts: cur.ts, items, markets: Object.keys(data).sort(),
+    groups: [...groups.values()].sort((a, b) => (b.best || 0) - (a.best || 0)),
+    unscanned: items.filter(it => !it.scanned).length, sources: kwtrends.SOURCES};
+});
+
+route("POST", "/api/kwtrends/refresh", async ({body}) => {
+  need(body.source in kwtrends.SOURCES, "Nguồn không hợp lệ");
+  let countries = [...new Set((body.countries || ["US"]).map(c => String(c).trim().toUpperCase()).filter(Boolean))].slice(0, 13);
+  if (!countries.length) countries = [C.DEFAULT_COUNTRY];
+  let queued = 0;
+  for (const c of countries) queued += jobs.submit("kwtrend", `Xu hướng ${kwtrends.SOURCES[body.source]} ${c}`, {source: body.source, geo: c});
+  return {queued};
+});
+
 route("POST", "/api/stop", () => { jobs.stopCurrent(); return {ok: true}; });
 route("GET", "/api/jobs", () => jobs.status());
 route("GET", "/api/scans", () => db.listScans());

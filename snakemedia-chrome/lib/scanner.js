@@ -8,6 +8,7 @@ import {C, URLS} from "./config.js";
 import * as safety from "./safety.js";
 import * as diag from "./diag.js";
 import * as social from "./social.js";
+import * as kwtrends from "./kwtrends.js";
 import {parseJsonText} from "./fbparser.js";
 
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -148,7 +149,7 @@ async function saveDiag(win, label, url, raws, error, nItems, log) {
 export async function collect(url, maxItems, log, stop = () => false, {
   match = u => u.includes("/api/graphql"), marker = "ad_archive_id", parseText = parseJsonText, ssr = true,
   key = "ad_id", noun = "QC", platform = "facebook", clickMorePattern = null, prepare = null, label = null,
-  win = null,
+  win = null, progress = null,
 } = {}) {
   const markers = [].concat(marker);
   const own = !win;
@@ -193,7 +194,10 @@ export async function collect(url, maxItems, log, stop = () => false, {
       await check();
       drain();
       stale = items.size === before ? stale + 1 : 0;
-      if (items.size !== before) log(`  ... đã đọc ${items.size} ${noun}`);
+      if (items.size !== before) {
+        log(`  ... đã đọc ${items.size} ${noun}`);
+        if (progress) progress(items.size);
+      }
     }
     drain();
     if (!items.size) await saveDiag(win, label || `${platform}-${noun}`, url, raws, "Không đọc được kết quả nào", 0, log);
@@ -207,9 +211,10 @@ export async function collect(url, maxItems, log, stop = () => false, {
   return [...items.values()].slice(0, maxItems);
 }
 
-export const scanKeyword = (keyword, country, maxAds, log, stop) => collect(keywordUrl(keyword, country), maxAds, log, stop);
+export const scanKeyword = (keyword, country, maxAds, log, stop, progress = null) =>
+  collect(keywordUrl(keyword, country), maxAds, log, stop, {progress});
 
-export async function scanPages(pageIds, country, maxAds, log, stop = () => false) {
+export async function scanPages(pageIds, country, maxAds, log, stop = () => false, progress = null) {
   const out = [];
   const win = await openScanWindow();
   try {
@@ -221,7 +226,8 @@ export async function scanPages(pageIds, country, maxAds, log, stop = () => fals
         for (let s = 0; s < gap && !stop(); s++) await sleep(1000);
       }
       log(`Đào page ${pageIds[i]}`);
-      out.push(...await collect(pageUrl(pageIds[i], country), maxAds, log, stop, {win}));
+      const b = out.length;
+      out.push(...await collect(pageUrl(pageIds[i], country), maxAds, log, stop, {win, progress: progress && (n => progress(b + n))}));
     }
   } finally {
     await chrome.windows.remove(win.windowId).catch(() => {});
@@ -242,20 +248,26 @@ const typeKeyword = keyword => async (tabId, log) => {
   } catch (e) { log(`Không gõ được từ khoá vào Top Ads (${e.message}); lấy Top Ads chung`); }
 };
 
-export function scanSocial(platform, keyword, country, maxItems, period, log, stop = () => false) {
-  if (platform === "tiktok") return collect(tiktokUrl(keyword), maxItems, log, stop, {
+// Pinterest Trends của 1 thị trường: đọc lỏng mọi JSON của trang có từ khoá + % tăng trưởng (thử nghiệm).
+export const scanPinterest = (geo, maxItems, log, stop = () => false) =>
+  collect(URLS.PINTEREST_TRENDS.replace("{geo}", geo), maxItems, log, stop, {
+    match: u => u.includes("trends") || u.includes("/resource/"), marker: ["growth", "pct_"],
+    parseText: kwtrends.parsePinterestText, key: "term", noun: "từ khoá", platform: "pinterest"});
+
+export function scanSocial(platform, keyword, country, maxItems, period, log, stop = () => false, progress = null) {
+  if (platform === "tiktok") return collect(tiktokUrl(keyword), maxItems, log, stop, {progress,
     match: u => TIKTOK_API.some(k => u.includes(k)), marker: "playCount", parseText: social.parseTiktokText,
     key: "vid", noun: "video", platform: "tiktok"});
-  if (platform === "tiktok_ads") return collect(topadsUrl(country, period), maxItems, log, stop, {
+  if (platform === "tiktok_ads") return collect(topadsUrl(country, period), maxItems, log, stop, {progress,
     match: u => u.includes("creative_radar_api"), marker: "ad_title", parseText: social.parseTopadsText, ssr: false,
     key: "vid", noun: "Top Ads", platform: "tiktok", clickMorePattern: "View More|Xem thêm", prepare: typeKeyword(keyword)});
-  if (platform === "tiktok_trend") return collect(trendUrl(URLS.TREND_VIDEOS, country, period), maxItems, log, stop, {
+  if (platform === "tiktok_trend") return collect(trendUrl(URLS.TREND_VIDEOS, country, period), maxItems, log, stop, {progress,
     match: u => u.includes("creative_radar_api"), marker: ["item_url", "item_id"], parseText: social.parseTrendVideosText,
     key: "vid", noun: "video thịnh hành", platform: "tiktok", clickMorePattern: "View More|Xem thêm"});
-  if (platform === "tiktok_tags") return collect(trendUrl(URLS.TREND_TAGS, country, period), maxItems, log, stop, {
+  if (platform === "tiktok_tags") return collect(trendUrl(URLS.TREND_TAGS, country, period), maxItems, log, stop, {progress,
     match: u => u.includes("creative_radar_api"), marker: "hashtag_name", parseText: social.parseHashtagsText,
     key: "name", noun: "hashtag", platform: "tiktok", clickMorePattern: "View More|Xem thêm"});
-  if (platform === "fb_reels") return collect(reelsUrl(keyword), maxItems, log, stop, {
+  if (platform === "fb_reels") return collect(reelsUrl(keyword), maxItems, log, stop, {progress,
     marker: ["play_count", "video_view_count"], parseText: social.parseReelsText, key: "vid", noun: "video"});
   throw new Error(`Nền tảng không hỗ trợ: ${platform}`);
 }

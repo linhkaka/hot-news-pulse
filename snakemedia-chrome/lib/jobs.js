@@ -2,7 +2,7 @@
 //
 // Mỗi việc là dữ liệu {kind, title, args} và được lưu lại, nên Chrome tắt giữa chừng thì lần mở sau
 // các việc còn chờ vẫn chạy tiếp.
-import {C} from "./config.js";
+import {C, URLS} from "./config.js";
 import * as db from "./db.js";
 import * as analyze from "./analyze.js";
 import * as landing from "./landing.js";
@@ -13,10 +13,14 @@ import * as social from "./social.js";
 import * as demo from "./demo.js";
 import {fetchImage} from "./imagehash.js";
 import * as media from "./media.js";
+import * as kwtrends from "./kwtrends.js";
 import {parseJsonText} from "./fbparser.js";
 
 const LOG = [];
-const state = {current: null, pending: [], stop: false, running: false};
+const state = {current: null, pending: [], stop: false, running: false, kind: null, started: null, count: 0};
+// Phiên quét: các việc đã xong kể từ lúc hàng đợi rảnh -> bảng tiến độ "đang quét 9 / 25"
+const SESSION = [];
+const EST_JOB_S = 120;          // ước lượng 1 việc khi chưa có việc nào xong (giây)
 const hasStorage = () => globalThis.chrome && chrome.storage && chrome.storage.local;
 
 function persist() {
@@ -30,13 +34,34 @@ export function log(msg) {
   persist();
 }
 
+// Số QC / video đã đọc của việc đang chạy (bộ quét gọi mỗi lần đọc thêm)
+export function setProgress(n) { state.count = Math.trunc(n); }
+
+// Tiến độ phiên quét: việc xong (kèm số QC, thời gian), việc đang chạy, tốc độ QC/phút, thời gian còn lại.
+export function progress(t = Date.now() / 1000) {
+  const done = SESSION.slice();
+  const cur = state.current ? {title: state.current, kind: state.kind, count: state.count, secs: Math.trunc(t - (state.started || t))} : null;
+  const items = done.reduce((a, d) => a + d.n, 0) + (cur ? cur.count : 0);
+  const secs = done.reduce((a, d) => a + d.secs, 0) + (cur ? cur.secs : 0);
+  const avg = done.length ? done.reduce((a, d) => a + d.secs, 0) / done.length : EST_JOB_S;
+  const left = state.pending.length * avg + (cur ? Math.max(0, avg - cur.secs) : 0);
+  return {done: done.slice(-30), n_done: done.length, current: cur, pending: state.pending.map(j => j.title),
+    total: done.length + (cur ? 1 : 0) + state.pending.length, items,
+    rate: secs >= 30 ? Math.round(items * 60 / secs) : null, eta_s: cur || state.pending.length ? Math.trunc(left) : 0};
+}
+
+// Chỉ dùng cho bài kiểm thử
+export const _test = {state, SESSION};
+
 export async function status() {
-  return {current: state.current, pending: state.pending.map(j => j.title), log: LOG.slice(-80), blocked: await safety.blocked()};
+  return {current: state.current, pending: state.pending.map(j => j.title), log: LOG.slice(-80), blocked: await safety.blocked(),
+    progress: progress()};
 }
 
 // Xếp việc vào hàng đợi. Bỏ qua nếu việc trùng tên đang chờ/đang chạy.
 export function submit(kind, title, args = {}) {
   if (state.pending.some(j => j.title === title) || state.current === title) return false;
+  if (!state.current && !state.pending.length) SESSION.length = 0;   // hàng đợi đang rảnh -> bắt đầu phiên mới
   state.pending.push({kind, title, args});
   persist();
   kick();
@@ -68,33 +93,40 @@ function kick() {
 async function runLoop() {
   while (state.pending.length) {
     const job = state.pending.shift();
-    state.current = job.title;
-    state.stop = false;
+    Object.assign(state, {current: job.title, kind: job.kind, stop: false, started: Date.now() / 1000, count: 0});
     persist();
+    let n = 0, st = "xong";
     // Giữ phần nền của tiện ích thức trong lúc chạy việc dài (Chrome tự tắt phần nền rảnh sau 30 giây)
     const keepAlive = setInterval(() => chrome.runtime.getPlatformInfo().catch(() => {}), 20000);
     const scanId = await db.startScan(job.kind, job.title);
     try {
-      const n = (await JOBS[job.kind](job.args)) || 0;
-      await db.finishScan(scanId, state.stop ? "da dung" : "xong", n);
+      n = (await JOBS[job.kind](job.args)) || 0;
+      st = state.stop ? "da dung" : "xong";
+      await db.finishScan(scanId, st, n);
       log(`Xong: ${job.title}`);
     } catch (e) {
+      n = 0;
       if (e instanceof safety.Skipped) {
+        st = "bo qua";
         await db.finishScan(scanId, "bo qua", 0, String(e.message).slice(0, 500));
         log(`Bỏ qua '${job.title}': ${e.message}`);
       } else if (e instanceof safety.CheckpointError) {
+        st = "checkpoint";
         await safety.block(e.platform, e.reason, e.url);
         await db.finishScan(scanId, "checkpoint", 0, e.reason);
         log(`⚠ ${e.reason}. ĐÃ TẠM DỪNG mọi lượt quét ${safety.PLATFORMS[e.platform]}. ` +
           "Hãy tự xác minh trên Facebook/TikTok rồi bấm 'Đã xử lý, quét tiếp'.");
         await notify.send(`⚠ SNAKEMEDIA POD: ${e.reason}`, ["Đã tạm dừng quét để bảo vệ tài khoản."], log).catch(() => {});
       } else {
+        st = "loi";
         await db.finishScan(scanId, "loi", 0, String(e && e.message || e).slice(0, 500));
         log(`Lỗi khi chạy '${job.title}': ${e && e.message || e}`);
       }
     } finally {
       clearInterval(keepAlive);
-      state.current = null;
+      SESSION.push({title: job.title, kind: job.kind, n: Math.trunc(n), status: st, secs: Math.trunc(Date.now() / 1000 - state.started), ts: db.now()});
+      if (SESSION.length > 200) SESSION.splice(0, SESSION.length - 200);
+      Object.assign(state, {current: null, kind: null, count: 0});
       persist();
     }
   }
@@ -186,7 +218,7 @@ const JOBS = {
     await demo.clearIfDemo(log);
     log(`Quét từ khoá '${keyword}' (${country})`);
     await safety.beforeScan("facebook", log, shouldStop);
-    const ads = await scanner.scanKeyword(keyword, country, max_ads, log, shouldStop);
+    const ads = await scanner.scanKeyword(keyword, country, max_ads, log, shouldStop, setProgress);
     log(`Đọc được ${ads.length} QC`);
     await db.upsertAds(ads, keyword);
     await db.touchWatchKeyword(keyword);
@@ -201,10 +233,10 @@ const JOBS = {
     const started = db.now();
     let ads;
     if (kind === "page") {
-      ads = await scanner.scanPages([key], country, C.DIG_MAX_ADS_PER_PAGE, log, shouldStop);
+      ads = await scanner.scanPages([key], country, C.DIG_MAX_ADS_PER_PAGE, log, shouldStop, setProgress);
     } else {
       log(`Quét shop ${key}`);
-      ads = await scanner.scanKeyword(key, country, C.DEFAULT_MAX_ADS, log, shouldStop);
+      ads = await scanner.scanKeyword(key, country, C.DEFAULT_MAX_ADS, log, shouldStop, setProgress);
       const mine = ads.filter(a => a.domain === key);
       if (mine.length) ads = mine;
     }
@@ -230,7 +262,7 @@ const JOBS = {
     const byMarket = social.MARKET_SOURCES.has(platform);
     log(`Quét ${name} '${keyword || "tất cả"}'` + (byMarket ? ` (${country})` : ""));
     await safety.beforeScan(safety.platformOf(platform), log, shouldStop);
-    const items = await scanner.scanSocial(platform, keyword, country, max_items, period, log, shouldStop);
+    const items = await scanner.scanSocial(platform, keyword, country, max_items, period, log, shouldStop, setProgress);
     await db.touchSocialWatch(platform, keyword, byMarket ? country : "");
     if (platform === "tiktok_tags") {
       await db.upsertTrends(country, items);
@@ -251,7 +283,7 @@ const JOBS = {
     const pages = v.page_ids.slice(0, C.DIG_MAX_PAGES);
     log(`Đào sâu '${v.title.slice(0, 50)}' qua ${pages.length} page`);
     await safety.beforeScan("facebook", log, shouldStop);
-    const ads = await scanner.scanPages(pages, country, C.DIG_MAX_ADS_PER_PAGE, log, shouldStop);
+    const ads = await scanner.scanPages(pages, country, C.DIG_MAX_ADS_PER_PAGE, log, shouldStop, setProgress);
     await db.upsertAds(ads);
     await db.markDug(cid);
     await processAfterScan();
@@ -264,7 +296,7 @@ const JOBS = {
     await safety.beforeScan("facebook", log, shouldStop);
     const known = new Set((await db.allAds()).map(a => a.ad_id));   // QC đã có trước lượt soi
     log(`Soi store ${domain}`);
-    let ads = await scanner.scanKeyword(domain, country, C.DEFAULT_MAX_ADS, log, shouldStop);
+    let ads = await scanner.scanKeyword(domain, country, C.DEFAULT_MAX_ADS, log, shouldStop, setProgress);
     const mine = ads.filter(a => a.domain === domain);
     if (mine.length) ads = mine;
     await db.upsertAds(ads);
@@ -277,6 +309,24 @@ const JOBS = {
   },
 
   async recompute() { await recompute(); return 0; },
+
+  // Gợi ý từ khoá từ xu hướng: Google Trends (RSS) / Pinterest Trends (mở trang trong cửa sổ quét)
+  async kwtrend({source, geo}) {
+    let items;
+    if (source === "google") {
+      log(`Lấy tìm kiếm thịnh hành Google Trends (${geo})`);
+      const r = await fetch(URLS.GOOGLE_TRENDS_RSS.replace("{geo}", geo), {credentials: "omit"});
+      if (!r.ok) throw new Error(`Google Trends trả về mã ${r.status}`);
+      items = kwtrends.parseGoogleRss(await r.text());
+    } else {
+      log(`Mở Pinterest Trends (${geo})`);
+      await safety.beforeScan("pinterest", log, shouldStop);
+      items = await scanner.scanPinterest(geo, 300, log, shouldStop);
+    }
+    await kwtrends.save(db, source, geo, items);
+    log(`Đọc được ${items.length} từ khoá ${kwtrends.SOURCES[source]} (${geo})`);
+    return items.length;
+  },
 
   // Tải hàng loạt ảnh / video (Chrome tự lưu vào Tải về/SnakemediaPOD/<ngày>/)
   async media({targets, kind}) {
@@ -453,6 +503,13 @@ const STOP = new Set(["the", "a", "an", "and", "or", "for", "to", "of", "in", "o
 function phrase(words, n) {
   words = words.filter(w => !STOP.has(w) && !/^\d+$/.test(w) && w.length > 1);
   return words.length >= 2 ? words.slice(0, n).join(" ") : null;
+}
+
+// Từ khoá đã quét (QC có từ khoá) hoặc đang tự quét mỗi đêm, chữ thường
+export async function knownKeywords() {
+  const known = new Set((await db.listWatchKeywords()).map(w => w.keyword.toLowerCase()));
+  for (const a of await db.allAds()) if (a.keyword) known.add(a.keyword.toLowerCase());
+  return known;
 }
 
 export async function keywordSuggestions(limit = 30) {

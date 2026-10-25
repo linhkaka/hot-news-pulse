@@ -72,7 +72,7 @@ def open_browser(p, headless=None):
 
 def collect(ctx, url, max_ads, log, stop=lambda: False, *, match=lambda u: "/api/graphql" in u,
             marker="ad_archive_id", parse_text=parse_json_text, parse_page=parse_html, key="ad_id",
-            noun="QC", platform="facebook", click_more=None, prepare=None, label=None):
+            noun="QC", platform="facebook", click_more=None, prepare=None, label=None, progress=None):
     """Mở 1 trang, cuộn tới khi đủ max_ads hoặc hết kết quả, đọc dữ liệu từ các phản hồi JSON của trang.
 
     Mặc định cho Thư viện QC Facebook; TikTok / Facebook Reels truyền bộ lọc và bộ đọc riêng.
@@ -128,6 +128,8 @@ def collect(ctx, url, max_ads, log, stop=lambda: False, *, match=lambda u: "/api
             stale = stale + 1 if len(items) == before else 0
             if len(items) != before:
                 log(f"  ... đã đọc {len(items)} {noun}")
+                if progress:
+                    progress(len(items))
         drain()
         if not items:
             _save_diag(page, label or f"{platform}-{noun}", url, raws, "Không đọc được kết quả nào", 0, log)
@@ -164,11 +166,11 @@ def run_collect(url, max_items, log, stop=lambda: False, **kw):
             ctx.close()
 
 
-def scan_keyword(keyword, country, max_ads, log, stop=lambda: False):
-    return run_collect(keyword_url(keyword, country), max_ads, log, stop)
+def scan_keyword(keyword, country, max_ads, log, stop=lambda: False, progress=None):
+    return run_collect(keyword_url(keyword, country), max_ads, log, stop, progress=progress)
 
 
-def scan_pages(page_ids, country, max_ads, log, stop=lambda: False):
+def scan_pages(page_ids, country, max_ads, log, stop=lambda: False, progress=None):
     out = []
     with sync_playwright() as p:
         ctx = open_browser(p)
@@ -184,7 +186,9 @@ def scan_pages(page_ids, country, max_ads, log, stop=lambda: False):
                             break
                         time.sleep(1)
                 log(f"Đào page {pid}")
-                out += collect(ctx, page_url(pid, country), max_ads, log, stop)
+                base = len(out)
+                out += collect(ctx, page_url(pid, country), max_ads, log, stop,
+                               progress=(lambda n, b=base: progress(b + n)) if progress else None)
         finally:
             ctx.close()
     return out
@@ -235,34 +239,44 @@ def _type_search(keyword):
     return prepare
 
 
-def scan_social(platform, keyword, country, max_items, period, log, stop=lambda: False):
+def scan_pinterest(geo, max_items, log, stop=lambda: False):
+    """Pinterest Trends của 1 thị trường: đọc lỏng mọi JSON của trang có từ khoá + % tăng trưởng (thử nghiệm)."""
+    from . import kwtrends
+    return run_collect(
+        config.PINTEREST_TRENDS.format(geo=geo), max_items, log, stop,
+        match=lambda u: "trends" in u or "/resource/" in u, marker=("growth", "pct_"),
+        parse_text=kwtrends.parse_pinterest_text, parse_page=kwtrends.parse_pinterest_html, key="term",
+        noun="từ khoá", platform="pinterest")
+
+
+def scan_social(platform, keyword, country, max_items, period, log, stop=lambda: False, progress=None):
     if platform == "tiktok":
         return run_collect(
-            tiktok_url(keyword), max_items, log, stop,
+            tiktok_url(keyword), max_items, log, stop, progress=progress,
             match=lambda u: any(k in u for k in ("/api/search/", "/api/challenge/item_list", "/api/post/item_list")),
             marker="playCount", parse_text=social.parse_tiktok_text, parse_page=social.parse_tiktok_html,
             key="vid", noun="video", platform="tiktok")
     if platform == "tiktok_ads":
         return run_collect(
-            topads_url(country, period), max_items, log, stop,
+            topads_url(country, period), max_items, log, stop, progress=progress,
             match=lambda u: "creative_radar_api" in u, marker="ad_title",
             parse_text=social.parse_topads_text, parse_page=lambda html: [], key="vid", noun="Top Ads",
             platform="tiktok", click_more="text=/View More|Xem thêm/i", prepare=_type_search(keyword))
     if platform == "tiktok_trend":
         return run_collect(
-            trend_url(TREND_VIDEOS, country, period), max_items, log, stop,
+            trend_url(TREND_VIDEOS, country, period), max_items, log, stop, progress=progress,
             match=lambda u: "creative_radar_api" in u, marker=("item_url", "item_id"),
             parse_text=social.parse_trend_videos_text, parse_page=social.parse_trend_videos_html, key="vid",
             noun="video thịnh hành", platform="tiktok", click_more="text=/View More|Xem thêm/i")
     if platform == "tiktok_tags":
         return run_collect(
-            trend_url(TREND_TAGS, country, period), max_items, log, stop,
+            trend_url(TREND_TAGS, country, period), max_items, log, stop, progress=progress,
             match=lambda u: "creative_radar_api" in u, marker="hashtag_name",
             parse_text=social.parse_hashtags_text, parse_page=social.parse_hashtags_html, key="name",
             noun="hashtag", platform="tiktok", click_more="text=/View More|Xem thêm/i")
     if platform == "fb_reels":
         return run_collect(
-            reels_url(keyword), max_items, log, stop,
+            reels_url(keyword), max_items, log, stop, progress=progress,
             marker=("play_count", "video_view_count"), parse_text=social.parse_reels_text,
             parse_page=social.parse_reels_html, key="vid", noun="video")
     raise ValueError(f"Nền tảng không hỗ trợ: {platform}")

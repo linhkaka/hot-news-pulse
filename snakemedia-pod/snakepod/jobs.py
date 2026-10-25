@@ -15,7 +15,10 @@ from .imagehash import dhash
 
 LOG = collections.deque(maxlen=300)
 _queue = queue.Queue()
-_state = {"current": None, "pending": [], "stop": False}
+_state = {"current": None, "pending": [], "stop": False, "kind": None, "started": None, "count": 0}
+# Phiên quét: các việc đã xong kể từ lúc hàng đợi rảnh -> bảng tiến độ "đang quét 9 / 25"
+SESSION = collections.deque(maxlen=200)
+EST_JOB_S = 120                 # ước lượng 1 việc khi chưa có việc nào xong (giây)
 
 
 def log(msg):
@@ -23,15 +26,40 @@ def log(msg):
     print(time.strftime("%H:%M:%S"), msg, flush=True)
 
 
+def set_progress(n):
+    """Số QC / video đã đọc của việc đang chạy (bộ quét gọi mỗi lần đọc thêm)."""
+    _state["count"] = int(n)
+
+
+def progress(now=None):
+    """Tiến độ phiên quét: việc xong (kèm số QC, thời gian), việc đang chạy, tốc độ QC/phút, thời gian còn lại."""
+    now = now or time.time()
+    done = list(SESSION)
+    cur = None
+    if _state["current"]:
+        cur = {"title": _state["current"], "kind": _state["kind"], "count": _state["count"],
+               "secs": int(now - (_state["started"] or now))}
+    items = sum(d["n"] for d in done) + (cur["count"] if cur else 0)
+    secs = sum(d["secs"] for d in done) + (cur["secs"] if cur else 0)
+    avg = (sum(d["secs"] for d in done) / len(done)) if done else EST_JOB_S
+    left = len(_state["pending"]) * avg + (max(0, avg - cur["secs"]) if cur else 0)
+    return {"done": done[-30:], "n_done": len(done), "current": cur, "pending": list(_state["pending"]),
+            "total": len(done) + (1 if cur else 0) + len(_state["pending"]), "items": items,
+            "rate": round(items * 60 / secs) if secs >= 30 else None,
+            "eta_s": int(left) if (cur or _state["pending"]) else 0}
+
+
 def status():
     return {"current": _state["current"], "pending": list(_state["pending"]), "log": list(LOG)[-80:],
-            "blocked": safety.blocked()}
+            "blocked": safety.blocked(), "progress": progress()}
 
 
 def submit(kind, title, fn):
     """Xếp việc vào hàng đợi. Bỏ qua nếu việc trùng tên đang chờ/đang chạy."""
     if title in _state["pending"] or title == _state["current"]:
         return False
+    if not _state["current"] and not _state["pending"]:   # hàng đợi đang rảnh -> bắt đầu phiên mới
+        SESSION.clear()
     _state["pending"].append(title)
     _queue.put((kind, title, fn))
     return True
@@ -45,25 +73,31 @@ def _worker():
     while True:
         kind, title, fn = _queue.get()
         _state["pending"].remove(title)
-        _state["current"] = title
-        _state["stop"] = False
+        _state.update(current=title, kind=kind, stop=False, started=time.time(), count=0)
         scan_id = db.start_scan(kind, title)
+        n, st = 0, "xong"
         try:
             n = fn() or 0
-            db.finish_scan(scan_id, "xong" if not _state["stop"] else "da dung", n)
+            st = "xong" if not _state["stop"] else "da dung"
+            db.finish_scan(scan_id, st, n)
             log(f"Xong: {title}")
         except safety.Skipped as e:
-            db.finish_scan(scan_id, "bo qua", error=str(e)[:500])
+            st = "bo qua"
+            db.finish_scan(scan_id, st, error=str(e)[:500])
             log(f"Bỏ qua '{title}': {e}")
         except safety.CheckpointError as e:
+            st = "checkpoint"
             safety.block(e.platform, e.reason, e.url)
-            db.finish_scan(scan_id, "checkpoint", error=e.reason)
+            db.finish_scan(scan_id, st, error=e.reason)
             log(f"⚠ {e.reason}. ĐÃ TẠM DỪNG mọi lượt quét {safety.PLATFORMS[e.platform]}. "
                 "Hãy tự xác minh trên trình duyệt rồi bấm 'Đã xử lý, quét tiếp'.")
         except Exception as e:
-            db.finish_scan(scan_id, "loi", error=str(e)[:500])
+            st = "loi"
+            db.finish_scan(scan_id, st, error=str(e)[:500])
             log(f"Lỗi khi chạy '{title}': {e}")
-        _state["current"] = None
+        SESSION.append({"title": title, "kind": kind, "n": int(n), "status": st,
+                        "secs": int(time.time() - _state["started"]), "ts": int(time.time())})
+        _state.update(current=None, kind=None, count=0)
 
 
 def start_worker():
@@ -151,7 +185,7 @@ def keyword_job(keyword, country, max_ads):
     def run():
         log(f"Quét từ khoá '{keyword}' ({country})")
         safety.before_scan("facebook", log, should_stop)
-        ads = scraper.scan_keyword(keyword, country, max_ads, log, should_stop)
+        ads = scraper.scan_keyword(keyword, country, max_ads, log, should_stop, set_progress)
         log(f"Đọc được {len(ads)} QC")
         db.upsert_ads(ads, keyword)
         db.touch_watch_keyword(keyword)
@@ -168,10 +202,10 @@ def follow_job(kind, key, country):
         safety.before_scan("facebook", log, should_stop)
         started = int(time.time())
         if kind == "page":
-            ads = scraper.scan_pages([key], country, config.DIG_MAX_ADS_PER_PAGE, log, should_stop)
+            ads = scraper.scan_pages([key], country, config.DIG_MAX_ADS_PER_PAGE, log, should_stop, set_progress)
         else:
             log(f"Quét shop {key}")
-            ads = scraper.scan_keyword(key, country, config.DEFAULT_MAX_ADS, log, should_stop)
+            ads = scraper.scan_keyword(key, country, config.DEFAULT_MAX_ADS, log, should_stop, set_progress)
             ads = [a for a in ads if a.get("domain") == key] or ads
         log(f"Đọc được {len(ads)} QC")
         db.upsert_ads(ads)
@@ -220,7 +254,7 @@ def social_job(platform, keyword, country, max_items, period=7):
         by_market = platform in social.MARKET_SOURCES
         log(f"Quét {name} '{keyword or 'tất cả'}'" + (f" ({country})" if by_market else ""))
         safety.before_scan(safety.platform_of(platform), log, should_stop)
-        items = scraper.scan_social(platform, keyword, country, max_items, period, log, should_stop)
+        items = scraper.scan_social(platform, keyword, country, max_items, period, log, should_stop, set_progress)
         db.touch_social_watch(platform, keyword, country if by_market else "")
         if platform == "tiktok_tags":
             db.upsert_trends(country, items)
@@ -295,7 +329,7 @@ def dig_job(cid, country):
         pages = v["page_ids"][: config.DIG_MAX_PAGES]
         log(f"Đào sâu '{v['title'][:50]}' qua {len(pages)} page")
         safety.before_scan("facebook", log, should_stop)
-        ads = scraper.scan_pages(pages, country, config.DIG_MAX_ADS_PER_PAGE, log, should_stop)
+        ads = scraper.scan_pages(pages, country, config.DIG_MAX_ADS_PER_PAGE, log, should_stop, set_progress)
         db.upsert_ads(ads)
         db.mark_dug(cid)
         process_after_scan()
@@ -358,7 +392,7 @@ def sweep_job(domain, country):
         safety.before_scan("facebook", log, should_stop)
         known = {a["ad_id"] for a in db.all_ads()}          # QC đã có trước lượt soi
         log(f"Soi store {domain}")
-        ads = scraper.scan_keyword(domain, country, config.DEFAULT_MAX_ADS, log, should_stop)
+        ads = scraper.scan_keyword(domain, country, config.DEFAULT_MAX_ADS, log, should_stop, set_progress)
         ads = [a for a in ads if a.get("domain") == domain] or ads
         db.upsert_ads(ads)
         process_after_scan()
@@ -404,3 +438,30 @@ def keyword_suggestions(limit=30):
                 source.setdefault(kw, src)
     out = sorted(count, key=lambda k: (-count[k], k))[:limit]
     return [{"keyword": k, "videos": count[k], "source": source[k]} for k in out]
+
+
+# ---- gợi ý từ khoá từ xu hướng: Google Trends + Pinterest Trends ----
+
+def kwtrend_job(source, geo):
+    from . import kwtrends, scraper
+
+    def run():
+        if source == "google":
+            log(f"Lấy tìm kiếm thịnh hành Google Trends ({geo})")
+            with httpx.Client(timeout=30, follow_redirects=True, headers={"User-Agent": landing.UA}) as c:
+                r = c.get(config.GOOGLE_TRENDS_RSS.format(geo=geo))
+                r.raise_for_status()
+                items = kwtrends.parse_google_rss(r.text)
+        else:
+            log(f"Mở Pinterest Trends ({geo})")
+            safety.before_scan("pinterest", log, should_stop)
+            items = scraper.scan_pinterest(geo, 300, log, should_stop)
+        kwtrends.save(db, source, geo, items)
+        log(f"Đọc được {len(items)} từ khoá {kwtrends.SOURCES[source]} ({geo})")
+        return len(items)
+    return run
+
+
+def known_keywords():
+    """Từ khoá đã quét (QC có từ khoá) hoặc đang tự quét mỗi đêm, chữ thường."""
+    return {w["keyword"].lower() for w in db.list_watch_keywords()} | db.ad_keywords()

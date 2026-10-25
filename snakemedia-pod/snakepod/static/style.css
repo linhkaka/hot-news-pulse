@@ -137,3 +137,46 @@ tr.vrow:hover,tr.vrow.on{background:var(--soft)}
 .chips.markets .chip{cursor:pointer;user-select:none}
 .chips.markets input{margin:0 4px 0 0;vertical-align:-2px}
 .mediabar{margin:0 0 10px;gap:6px}
+
+/* ---------- thẻ video kiểu lưới (Tổng quan / kiểu xem Lưới) ---------- */
+.vcard .gimg{aspect-ratio:4/5}
+.vcard .rank{position:absolute;right:8px;top:8px;background:rgba(0,0,0,.6);color:#fff;font-size:11px;font-weight:600;padding:1px 7px;border-radius:999px}
+.vcard .age{display:flex;gap:10px;align-items:center;margin-bottom:6px}
+.vcard .age b{font-size:13px}
+.ring{--p:0;--c:var(--muted);flex-shrink:0;width:44px;height:44px;border-radius:50%;display:grid;place-content:center;text-align:center;line-height:1;
+  background:radial-gradient(closest-side,var(--card) 76%,transparent 78%),conic-gradient(var(--c) calc(var(--p)*360deg),var(--line) 0)}
+.ring b{font-size:15px}.ring small{font-size:9px;color:var(--muted)}
+.ring.g{--c:var(--green)}.ring.o{--c:var(--amber)}.ring.r{--c:var(--red)}
+.vcard .why{font-size:12px;color:var(--blue);margin:2px 0 4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.vcard .dom{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+.vcard .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:4px;text-align:center;margin:10px 0 8px;padding-top:8px;border-top:1px solid var(--line)}
+.vcard .stats b{display:block;font-size:15px}.vcard .stats small{font-size:11px;color:var(--muted)}.vcard .stats b small{font-size:11px}
+.vcard .cbtns{display:grid;grid-template-columns:1fr 1fr;gap:6px}.vcard .cbtns>*{padding:6px 8px}
+
+/* ---------- Quét từ khoá: gợi ý từ khoá + bảng tiến độ ---------- */
+.split{display:grid;grid-template-columns:minmax(0,1fr) 340px;gap:16px;align-items:start}
+.split aside{position:sticky;top:12px}
+@media (max-width:1100px){.split{grid-template-columns:1fr}.split aside{position:static}}
+.kwtabs{margin-left:10px}
+.kwlist{max-height:420px;overflow:auto;border:1px solid var(--line);border-radius:10px;margin-top:6px}
+.kwlist table td,.kwlist table th{padding:6px 10px}
+.kwlist tr.dim td{opacity:.55}
+.pcur{display:flex;gap:10px;align-items:center;background:var(--soft);border-radius:10px;padding:10px;margin:10px 0}
+.spin{width:22px;height:22px;border-radius:50%;border:3px solid var(--line);border-top-color:var(--blue);animation:spin 1s linear infinite;flex-shrink:0}
+@keyframes spin{to{transform:rotate(360deg)}}
+.plist{max-height:260px;overflow:auto;margin:6px 0}
+.pline{display:flex;gap:8px;align-items:center;padding:5px 0;border-bottom:1px solid var(--line);font-size:13px}
+.pline span{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex-shrink:0}
+.dot.g{background:var(--green)}.dot.o{background:var(--amber)}.dot.r{background:var(--red)}.dot.w{background:var(--line)}
+.pfoot{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;text-align:center;background:var(--soft);border-radius:10px;padding:8px}
+.pfoot b{display:block;font-size:15px}.pfoot small{font-size:11px;color:var(--muted)}
+
+/* ---------- Kết nối Shopify ---------- */
+.steps{padding-left:20px;line-height:1.6}.steps li{margin:6px 0}
+.steps code,.note code{background:var(--soft);padding:1px 6px;border-radius:6px}
+code.copy{display:block;flex:1;padding:8px 10px;white-space:normal;word-break:break-all}
+.field{display:block;margin:10px 0;font-weight:600;font-size:13px}
+.field input{display:block;width:100%;max-width:460px;margin-top:4px;padding:9px 11px;border:1px solid var(--line);border-radius:10px;background:var(--card);color:var(--text);font:inherit;font-weight:400}
+.steps a{color:var(--blue);text-decoration:underline}
+.grid+.cards{margin-top:16px}

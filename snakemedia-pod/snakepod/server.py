@@ -9,7 +9,7 @@ from pydantic import BaseModel
 
 import threading
 
-from . import config, db, diag, jobs, media, notify, safety, social
+from . import config, db, diag, jobs, kwtrends, media, notify, safety, shopify, social
 
 STATIC = Path(__file__).parent / "static"
 LABELS = {"sap_win": "Sắp WIN", "win": "Video Win", "scale": "Video scale", "theo_doi": "Chờ thêm dữ liệu",
@@ -90,6 +90,22 @@ class MarkIn(BaseModel):
     on: bool = True
 
 
+class ShopifyIn(BaseModel):
+    shop: str
+    client_id: str = ""
+    client_secret: str = ""     # bỏ trống = giữ secret cũ (cùng store); hoặc Admin API access token shpat_...
+
+
+class CloneIn(BaseModel):
+    cid: str | None = None
+    url: str | None = None      # trang bán cần clone; bỏ trống = trang bán chính của video
+
+
+class KwTrendIn(BaseModel):
+    source: str                 # pinterest | google
+    countries: list[str] = ["US"]
+
+
 class CountIn(BaseModel):
     n: int = 10
     domains: list[str] = []
@@ -122,16 +138,19 @@ def _facets(items):
 
 
 TAB_SORTS = {"potential": lambda v: (v.get("ads_new_48h", 0), v["ads_per_day"]),
-             "cow": lambda v: (v["buckets"]["old"], v["ads_per_day"])}
+             "cow": lambda v: (v["buckets"]["old"], v["ads_per_day"]),
+             # Video nổi bật (Tổng quan): video mới nhất trước, nhiều shop đang chạy trước
+             "hot": lambda v: (-(v["video_age_days"] if v["video_age_days"] is not None else 9999), v["shops_active"])}
 
 
 def _decorate(items):
     """Gắn đánh dấu (Video test / Đã ẩn), lần đào gần nhất và thay đổi so với hôm trước (lịch sử theo dõi)."""
-    mk, dug = db.marks(), db.digs()
+    mk, dug, clones = db.marks(), db.digs(), db.get_setting("clones", {})
     hist = db.history([v["cid"] for v in items], 2)
     for v in items:
         v["marks"] = sorted(mk.get(v["cid"], ()))
         v["dug_ts"] = dug.get(v["cid"])
+        v["clone"] = clones.get(v["cid"])
         h = hist.get(v["cid"]) or []
         v["delta"] = ({k: h[0][k] - h[1][k] for k in ("pages_active", "shops_active", "shops_win", "scale", "urls")}
                       if len(h) >= 2 else None)
@@ -154,6 +173,8 @@ def videos(label: str | None = None, q: str | None = None, product_type: str | N
         items = [v for v in items if v.get("potential")]
     elif tab == "cow":
         items = [v for v in items if v.get("cash_cow")]
+    elif tab == "hot":
+        items = [v for v in items if v["label"] in ("sap_win", "win", "scale") or v.get("potential")]
     elif tab == "dig":
         items = jobs.dig_candidates()
     if tab in TAB_SORTS:
@@ -524,6 +545,7 @@ def video(cid: str):
                   "variants": len({a["video_url"] for a in v["ads"] if a.get("video_url")})}
     v["history"] = db.history([cid], config.HISTORY_DAYS)[cid]
     v["sourcing"] = sourcing_links(v)
+    v["clone_url"] = _clone_url(v)
     return v
 
 
@@ -720,6 +742,84 @@ def dig(cid: str, country: str = config.DEFAULT_COUNTRY):
 def recompute():
     jobs.submit("recompute", "Chấm lại", lambda: jobs.recompute() or 0)
     return {"ok": True}
+
+
+# ---------------- Kết nối Shopify + Clone ----------------
+
+@app.get("/api/shopify")
+def shopify_status():
+    return shopify.status()
+
+
+@app.post("/api/shopify")
+def shopify_connect(body: ShopifyIn):
+    try:
+        return shopify.connect(body.shop, body.client_id, body.client_secret)
+    except shopify.ShopifyError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/shopify")
+def shopify_disconnect():
+    shopify.disconnect()
+    return {"ok": True}
+
+
+def _clone_url(v):
+    """Trang bán để clone: ưu tiên trang Shopify có nhiều QC nhất, rồi link chính của video."""
+    pages = v.get("sell_pages") or []
+    best = next((p for p in pages if p.get("platform") == "shopify"), None) or (pages[0] if pages else None)
+    return (best or {}).get("url") or v.get("main_link")
+
+
+@app.post("/api/shopify/clone")
+def shopify_clone(body: CloneIn):
+    url = body.url
+    if body.cid:
+        v = db.get_video(body.cid)
+        if not v:
+            raise HTTPException(404, "Không tìm thấy video")
+        url = url or _clone_url(v)
+    if not url or not url.startswith(("http://", "https://")):
+        raise HTTPException(400, "Video này chưa có trang bán để clone")
+    try:
+        rec = shopify.clone(url, body.cid)
+    except shopify.ShopifyError as e:
+        raise HTTPException(400, str(e))
+    jobs.log(f"Đã clone '{rec['title'][:60]}' vào store {rec['shop']} (bản nháp)")
+    return rec
+
+
+# ---------------- Gợi ý từ khoá: Pinterest / Google Trends / Tự đào ----------------
+
+@app.get("/api/kwtrends")
+def kw_trends(source: str = "pinterest", market: str = config.DEFAULT_COUNTRY):
+    if source not in kwtrends.SOURCES:
+        raise HTTPException(404)
+    market = market.upper()
+    data = db.get_setting("kwtrends", {}).get(source, {})
+    cur = data.get(market) or {"ts": None, "items": []}
+    known = jobs.known_keywords()
+    items = [{**it, "scanned": it["term"] in known} for it in cur["items"]]
+    groups = {}
+    for it in items:
+        g = groups.setdefault(it.get("group") or "", {"name": it.get("group") or "", "terms": 0, "unscanned": 0, "best": None})
+        g["terms"] += 1
+        g["unscanned"] += not it["scanned"]
+        g["best"] = max(g["best"] or it["score"] or 0, it["score"] or 0)
+    return {"source": source, "market": market, "ts": cur["ts"], "items": items, "markets": sorted(data),
+            "groups": sorted(groups.values(), key=lambda g: -(g["best"] or 0)),
+            "unscanned": sum(1 for it in items if not it["scanned"]), "sources": kwtrends.SOURCES}
+
+
+@app.post("/api/kwtrends/refresh")
+def kw_trends_refresh(body: KwTrendIn):
+    if body.source not in kwtrends.SOURCES:
+        raise HTTPException(400, "Nguồn không hợp lệ")
+    countries = list(dict.fromkeys(c.strip().upper() for c in body.countries if c.strip()))[:13] or [config.DEFAULT_COUNTRY]
+    queued = sum(jobs.submit("kwtrend", f"Xu hướng {kwtrends.SOURCES[body.source]} {c}", jobs.kwtrend_job(body.source, c))
+                 for c in countries)
+    return {"queued": queued}
 
 
 @app.post("/api/stop")

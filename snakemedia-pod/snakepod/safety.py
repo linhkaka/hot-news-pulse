@@ -12,10 +12,11 @@ from datetime import datetime
 
 from . import db
 
-PLATFORMS = {"facebook": "Facebook", "tiktok": "TikTok"}
+PLATFORMS = {"facebook": "Facebook", "tiktok": "TikTok", "pinterest": "Pinterest"}
 DEFAULT_LIMITS = {
     "facebook": {"min_gap_s": 90, "max_per_day": 40},
     "tiktok": {"min_gap_s": 150, "max_per_day": 20},
+    "pinterest": {"min_gap_s": 120, "max_per_day": 15},
 }
 # Phần tử captcha phổ biến (Facebook, TikTok, reCAPTCHA, hCaptcha)
 CAPTCHA_SELECTOR = ('[id*="captcha" i], [class*="captcha" i], iframe[src*="captcha" i], '
@@ -33,8 +34,9 @@ class Skipped(Exception):
 
 
 def platform_of(source):
-    """'fb_reels', 'tiktok_ads', 'keyword'... -> 'facebook' | 'tiktok'."""
-    return "tiktok" if str(source).startswith("tiktok") else "facebook"
+    """'fb_reels', 'tiktok_ads', 'keyword', 'pinterest'... -> 'facebook' | 'tiktok' | 'pinterest'."""
+    s = str(source)
+    return "tiktok" if s.startswith("tiktok") else "pinterest" if s.startswith("pinterest") else "facebook"
 
 
 def detect(platform, url, title="", has_captcha=False):
@@ -48,6 +50,9 @@ def detect(platform, url, title="", has_captcha=False):
             return "Facebook yêu cầu xác minh 2 bước"
         if "/login" in u or "login.php" in u:
             return "Facebook yêu cầu đăng nhập lại"
+    elif platform == "pinterest":
+        if "/login" in u:
+            return "Pinterest yêu cầu đăng nhập"
     else:
         if "/login" in u:
             return "TikTok yêu cầu đăng nhập lại"

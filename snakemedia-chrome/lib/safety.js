@@ -10,7 +10,7 @@
 import * as db from "./db.js";
 import {C} from "./config.js";
 
-export const PLATFORMS = {facebook: "Facebook", tiktok: "TikTok"};
+export const PLATFORMS = {facebook: "Facebook", tiktok: "TikTok", pinterest: "Pinterest"};
 // Phần tử captcha phổ biến (Facebook, TikTok, reCAPTCHA, hCaptcha)
 export const CAPTCHA_SELECTOR = '[id*="captcha" i], [class*="captcha" i], iframe[src*="captcha" i], ' +
   'iframe[src*="recaptcha" i], iframe[src*="hcaptcha" i]';
@@ -22,8 +22,11 @@ export class CheckpointError extends Error {
 // Lượt quét bị bỏ qua có chủ đích (đang tạm dừng / hết lượt trong ngày)
 export class Skipped extends Error {}
 
-// 'fb_reels', 'tiktok_ads', 'keyword'... -> 'facebook' | 'tiktok'
-export const platformOf = source => (String(source).startsWith("tiktok") ? "tiktok" : "facebook");
+// 'fb_reels', 'tiktok_ads', 'keyword', 'pinterest'... -> 'facebook' | 'tiktok' | 'pinterest'
+export const platformOf = source => {
+  const s = String(source);
+  return s.startsWith("tiktok") ? "tiktok" : s.startsWith("pinterest") ? "pinterest" : "facebook";
+};
 
 // Trả về lý do (tiếng Việt) nếu trang đang là checkpoint / captcha / bắt đăng nhập, ngược lại null.
 export function detect(platform, url, title = "", hasCaptcha = false) {
@@ -35,6 +38,8 @@ export function detect(platform, url, title = "", hasCaptcha = false) {
     if (u.includes("two_step_verification") || u.includes("/two_factor") || u.includes("/challenge"))
       return "Facebook yêu cầu xác minh 2 bước";
     if (u.includes("/login") || u.includes("login.php")) return "Facebook yêu cầu đăng nhập lại";
+  } else if (platform === "pinterest") {
+    if (u.includes("/login")) return "Pinterest yêu cầu đăng nhập";
   } else {
     if (u.includes("/login")) return "TikTok yêu cầu đăng nhập lại";
     if (t.includes("verify") && t.includes("tiktok")) return "TikTok yêu cầu xác minh";

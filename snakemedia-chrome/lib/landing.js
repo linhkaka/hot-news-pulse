@@ -14,7 +14,7 @@ const DATE_RE = new RegExp(DATE_KEYS + '\\s*:\\s*"?([0-9]{4}-[0-9]{2}-[0-9]{2}[T
 const UUID_RE = /"(?:product_id|productId|id|spu_id)"\s*:\s*"([0-9a-f]{8}-[0-9a-f]{4}-1[0-9a-f]{3}-[0-9a-f]{4}-[0-9a-f]{12})"/gi;
 const IMG_V_RE = /(?:cdn\.shopify\.com|\/cdn\/shop)\/[^"'\s]+?\?v=(1[5-9][0-9]{8})/g;
 const UPLOADS_RE = /\/uploads\/(20[1-3][0-9])\/(0[1-9]|1[0-2])\//g;
-const TITLE_RE = /<title[^>]*>([\s\S]*?)<\/title>/i;
+export const TITLE_RE = /<title[^>]*>([\s\S]*?)<\/title>/i;
 const MIN_TS = 1262304000;   // 2010-01-01: bỏ mốc vô lý
 
 export function isoTs(s) {
@@ -83,7 +83,7 @@ export function datesFromHtml(html) {
   return [null, null];
 }
 
-function priceFromHtml(html) {
+export function priceFromHtml(html) {
   const m = /"price"\s*:\s*"?([0-9]+(?:\.[0-9]{1,2})?)"?/.exec(html);
   return m ? m[1] : null;
 }

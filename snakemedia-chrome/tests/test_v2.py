@@ -61,8 +61,9 @@ def test_dashboard_new_views(ext):
     assert ext.get("/api/stats")["tabs"]["test"] == 2
     page.evaluate("v => setView(v)", "scan")
     page.wait_for_selector("#batchForm")
-    page.locator(".chip.g").first.click()                     # gợi ý từ khoá -> thêm vào ô quét hàng loạt
-    assert page.input_value("#batchForm [name=keywords]").strip()
+    page.click("#kwBox >> text=Tự đào")                       # gợi ý từ khoá tự đào từ video hot trong kho
+    page.wait_for_selector("#kwBox .kwpick")
+    assert page.locator("#kwBox .kwpick").first.get_attribute("value")
     assert ext.errors == []
 
 

@@ -15,6 +15,7 @@ export const C = {
   SAFETY_DEFAULT_LIMITS: {
     facebook: {min_gap_s: 90, max_per_day: 40},
     tiktok: {min_gap_s: 150, max_per_day: 20},
+    pinterest: {min_gap_s: 120, max_per_day: 15},
   },
 
   AUTO_SCAN_HOUR: 1,             // giờ tự quét mỗi đêm (giờ máy tính), sửa được trên giao diện
@@ -80,6 +81,12 @@ export const C = {
   // của Creative Center. TikTok tìm kiếm thường và Facebook Reels ra kết quả theo tài khoản + IP của bạn.
   MARKETS: {US: "Mỹ", GB: "Anh", CA: "Canada", AU: "Úc", DE: "Đức", FR: "Pháp", IT: "Ý", ES: "Tây Ban Nha",
     NL: "Hà Lan", JP: "Nhật", BR: "Brazil", MX: "Mexico", VN: "Việt Nam"},
+
+  // Kết nối Shopify (nút Clone): đưa sản phẩm của trang bán vào store của bạn dưới dạng NHÁP (Draft)
+  SHOPIFY_API_VERSION: "2025-10",
+  SHOPIFY_SCOPES: "write_products,read_products",
+  CLONE_MAX_IMAGES: 20,
+  CLONE_MAX_VARIANTS: 100,
 };
 
 // Địa chỉ các trang được quét. Bài kiểm thử đổi sang trang giả trên máy (xem applyDev).
@@ -90,6 +97,11 @@ export const URLS = {
   TREND_VIDEOS: "https://ads.tiktok.com/business/creativecenter/inspiration/popular/video/pc/en",
   TREND_TAGS: "https://ads.tiktok.com/business/creativecenter/inspiration/popular/hashtag/pc/en",
   TG_API: "https://api.telegram.org",
+  // Gợi ý từ khoá: Google Trends (RSS tìm kiếm thịnh hành) + Pinterest Trends (mở trang trong cửa sổ quét)
+  GOOGLE_TRENDS_RSS: "https://trends.google.com/trending/rss?geo={geo}",
+  PINTEREST_TRENDS: "https://trends.pinterest.com/?country={geo}",
+  PINTEREST: "https://www.pinterest.com",
+  SHOPIFY_BASE: null,            // chỉ dùng khi kiểm thử (máy chủ Shopify giả)
 };
 
 // Trang được gắn bộ bắt dữ liệu (content script)
@@ -98,6 +110,7 @@ export const CAPTURE_MATCHES = [
   "https://www.facebook.com/search/*",
   "https://www.tiktok.com/*",
   "https://ads.tiktok.com/business/creativecenter/*",
+  "https://trends.pinterest.com/*",
 ];
 export const DEV = {matches: []};
 

@@ -64,15 +64,16 @@ class Ext:
         """Chạy trong phần nền (service worker); các module nằm trong self.SP."""
         return self.sw.evaluate(expr, arg)
 
-    def dev(self, base, **config):
+    def dev(self, base, urls=None, **config):
         cfg = {"SCROLL_PAUSE_MS": [300, 600], "LOAD_WAIT_MS": 800, "PREPARE_WAIT_MS": 800, "PAGE_GAP_S": [0, 0],
                "PASSIVE_DELAY_S": 1, "SAFETY_DEFAULT_LIMITS": {"facebook": {"min_gap_s": 0, "max_per_day": 100},
-                                                               "tiktok": {"min_gap_s": 0, "max_per_day": 100}}}
+                                                               "tiktok": {"min_gap_s": 0, "max_per_day": 100},
+                                                               "pinterest": {"min_gap_s": 0, "max_per_day": 100}}}
         cfg.update(config)
         self.js("d => SP.setDev(d)", {"config": cfg, "matches": ["http://127.0.0.1/*", "http://localhost/*"],
                                       "urls": {"FB": base, "TIKTOK": base, "CREATIVE_CENTER": base + "/topads",
                                                "TREND_VIDEOS": base + "/trend-video", "TREND_TAGS": base + "/trend-hashtag",
-                                               "TG_API": base + "/tg"}})
+                                               "TG_API": base + "/tg", **(urls or {})}})
 
     def wait_idle(self, timeout=90):
         end = time.time() + timeout

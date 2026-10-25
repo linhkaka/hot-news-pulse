@@ -8,6 +8,7 @@ from .scraper import open_browser
 SITES = {
     "facebook": ("Facebook", "https://www.facebook.com/login"),
     "tiktok": ("TikTok", "https://www.tiktok.com/login"),
+    "pinterest": ("Pinterest", "https://www.pinterest.com/login/"),
 }
 
 
