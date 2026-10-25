@@ -8,6 +8,11 @@ on:
     paths: ["snakemedia-chrome/**", "snakemedia-pod/snakepod/**", ".github/workflows/snakepod-chrome.yml"]
     tags: ["snakepod-v*"]
   workflow_dispatch:
+    inputs:
+      release:
+        description: "Phát hành bản này lên Releases (vd 2.0.0); để trống = chỉ build"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -45,7 +50,10 @@ jobs:
           path: dist/SnakemediaPOD-Chrome
 
       - name: Attach to release
-        if: startsWith(github.ref, 'refs/tags/snakepod-v')
+        if: startsWith(github.ref, 'refs/tags/snakepod-v') || inputs.release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.release && format('snakepod-v{0}', inputs.release) || github.ref_name }}
+          name: ${{ inputs.release && format('SNAKEMEDIA POD {0}', inputs.release) || github.ref_name }}
+          target_commitish: ${{ github.sha }}
           files: dist/SnakemediaPOD-Chrome.zip
